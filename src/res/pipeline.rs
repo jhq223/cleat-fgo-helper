@@ -46,7 +46,7 @@ pub async fn cmd_list(server: &str) -> Result<()> {
 
     let config = crate::config::get_config(server);
     let entries = parser::parse(&storage_path, config.server_type)
-        .map_err(|e| crate::error::Error::Parse(e))?;
+        .map_err(crate::error::Error::Parse)?;
 
     let scripts = parser::find_script_assets(&entries);
 
@@ -91,7 +91,7 @@ pub async fn cmd_download(server: &str, force: bool, no_scripts: bool) -> Result
 
     // Step 3: Parse assets
     let entries = parser::parse(&storage_path, config.server_type)
-        .map_err(|e| crate::error::Error::Parse(e))?;
+        .map_err(crate::error::Error::Parse)?;
 
     let script_assets = parser::find_script_assets(&entries);
     log::info!("[{}] Found {} script assets", server, script_assets.len());
@@ -222,7 +222,7 @@ fn build_client() -> Result<reqwest::Client> {
         .timeout(std::time::Duration::from_secs(90)) // JP CDN redirect can take 40-50s
         .user_agent("Dalvik/2.1.0 (Linux; U; Android 13; Pixel 6 Build/TQ2A.230505.002)")
         .build()
-        .map_err(|e| crate::error::Error::Http(e))
+        .map_err(crate::error::Error::Http)
 }
 
 async fn load_or_fetch_extra_keys(
@@ -275,10 +275,10 @@ async fn load_or_fetch_extra_keys(
     }
 
     let key_list = crate::crypto::gamedata::unpack_key_list(ab_key_b64)
-        .map_err(|e| crate::error::Error::Crypto(e))?;
+        .map_err(crate::error::Error::Crypto)?;
 
     let json =
-        serde_json::to_string_pretty(&key_list).map_err(|e| crate::error::Error::Json(e))?;
+        serde_json::to_string_pretty(&key_list).map_err(crate::error::Error::Json)?;
     std::fs::write(&key_path, &json)?;
 
     let keys: HashMap<String, String> =

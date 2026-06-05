@@ -20,9 +20,6 @@ pub enum Error {
     #[error("Crypto error: {0}")]
     Crypto(String),
 
-    #[error("APK tool error: {0}")]
-    ApkTool(String),
-
     #[error("Parse error: {0}")]
     Parse(String),
 

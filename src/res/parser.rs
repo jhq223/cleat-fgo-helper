@@ -17,9 +17,7 @@ use std::path::Path;
 pub struct AssetEntry {
     pub asset_path: String,
     pub file_name: String,
-    pub asset_name: String,
     pub size: u64,
-    pub hash: String,
     pub extra_key: Option<String>,
 }
 
@@ -55,9 +53,7 @@ pub fn parse_text(text: &str, server_type: &str) -> Result<Vec<AssetEntry>, Stri
             assets.push(AssetEntry {
                 asset_path,
                 file_name,
-                asset_name: String::new(),
                 size,
-                hash: parts[0].to_string(),
                 extra_key: None,
             });
         } else {
@@ -87,9 +83,7 @@ pub fn parse_text(text: &str, server_type: &str) -> Result<Vec<AssetEntry>, Stri
             assets.push(AssetEntry {
                 asset_path,
                 file_name,
-                asset_name,
                 size: parts[2].parse::<u64>().unwrap_or(0),
-                hash: parts[1].to_string(),
                 extra_key,
             });
         }

@@ -50,28 +50,3 @@ pub fn decrypt(
         .map_err(|e| format!("utf-8 decode: {e}"))
 }
 
-/// Encrypt text → AssetStorage format (for re-upload / modding).
-pub fn encrypt(
-    plain_text: &str,
-    stage_data: &[u8; 32],
-    stage_top: &[u8; 32],
-) -> Result<String, String> {
-    use base64::Engine;
-    use std::io::Write;
-
-    // Byte NOT
-    let inverted: Vec<u8> = plain_text.as_bytes().iter().map(|&b| !b).collect();
-
-    // GZip compress
-    let mut compressed = Vec::new();
-    let mut encoder = flate2::write::GzEncoder::new(&mut compressed, flate2::Compression::best());
-    encoder
-        .write_all(&inverted)
-        .map_err(|e| format!("gzip compress: {e}"))?;
-    encoder.finish().map_err(|e| format!("gzip finish: {e}"))?;
-
-    // Rijndael-256-CBC encrypt
-    let encrypted = rijndael::encrypt(&compressed, stage_data, stage_top)?;
-
-    Ok(base64::engine::general_purpose::STANDARD.encode(&encrypted))
-}

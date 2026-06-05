@@ -22,15 +22,3 @@ pub fn decrypt(data: &[u8], key: &[u8; 32], iv: &[u8; 32]) -> Result<Vec<u8>, St
         .map_err(|e| format!("rijndael decrypt: {e:?}"))
 }
 
-/// Rijndael-256 CBC encrypt.
-///
-/// `key`: 32 bytes
-/// `iv`: 32 bytes
-/// `data`: plaintext (will be PKCS7 padded to 32-byte boundary)
-pub fn encrypt(data: &[u8], key: &[u8; 32], iv: &[u8; 32]) -> Result<Vec<u8>, String> {
-    let cipher = RijndaelCbc::<Pkcs7Padding>::new(key, BLOCK_SIZE)
-        .map_err(|e| format!("rijndael init: {e:?}"))?;
-    cipher
-        .encrypt(iv, data.to_vec())
-        .map_err(|e| format!("rijndael encrypt: {e:?}"))
-}

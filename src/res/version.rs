@@ -29,8 +29,6 @@ pub struct VersionInfo {
     pub date_ver: String,
     /// CN only: CDN address
     pub cdn_addr: Option<String>,
-    /// CN only: Server address
-    pub ser_addr: Option<String>,
     /// CN only: assetStorageVersion
     pub asset_storage_version: Option<String>,
 }
@@ -117,7 +115,7 @@ async fn fetch_jp(client: &reqwest::Client) -> Result<VersionInfo> {
     if let Some(fail) = response.get("fail") {
         if fail
             .get("action")
-            .map_or(false, |a| a == "app_version_up")
+            .is_some_and(|a| a == "app_version_up")
         {
             let detail = fail["detail"].as_str().unwrap_or("");
             let new_ver = if let Some(re) = JP_CONFIG.version_regex {
@@ -185,7 +183,6 @@ async fn fetch_jp(client: &reqwest::Client) -> Result<VersionInfo> {
             data_ver: sv_data_ver,
             date_ver: sv_date_ver,
             cdn_addr: None,
-            ser_addr: None,
             asset_storage_version: None,
         });
     }
@@ -204,7 +201,7 @@ async fn fetch_jp(client: &reqwest::Client) -> Result<VersionInfo> {
         .ok_or_else(|| Error::Version("No assetbundle field".into()))?;
 
     let gd: GameData =
-        gamedata::unpack(assetbundle_b64).map_err(|e| Error::Crypto(e))?;
+        gamedata::unpack(assetbundle_b64).map_err(Error::Crypto)?;
 
     log::info!("[JP] folderName: {}", gd.folder_name);
 
@@ -220,7 +217,6 @@ async fn fetch_jp(client: &reqwest::Client) -> Result<VersionInfo> {
         data_ver: gd.data_ver,
         date_ver: cache.date_ver,
         cdn_addr: None,
-        ser_addr: None,
         asset_storage_version: None,
     })
 }
@@ -329,7 +325,6 @@ async fn fetch_cn(client: &reqwest::Client) -> Result<VersionInfo> {
         data_ver,
         date_ver: String::new(),
         cdn_addr: Some(cdn_addr.clone()),
-        ser_addr: Some(ser_addr.clone()),
         asset_storage_version,
     })
 }

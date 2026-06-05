@@ -14,8 +14,6 @@ use std::io::Read;
 /// Parsed version info from gamedata MsgPack.
 #[derive(Debug, Clone, Deserialize, Default)]
 pub struct GameData {
-    #[serde(rename = "appVer", default)]
-    pub app_ver: String,
     #[serde(rename = "folderName", default)]
     pub folder_name: String,
     #[serde(rename = "dataVer", default)]

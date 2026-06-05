@@ -5,6 +5,8 @@
 //!   apk setup|build|clean
 //!   res download|info|list <jp|cn|all>
 //!   scripts txt-to-bundle|bundle-to-txt
+//!   script export|import
+//!   tools compare|dedup|deharmonize
 //!   mappings download
 //! ```
 
@@ -15,6 +17,7 @@ mod crypto;
 mod error;
 mod mappings;
 mod res;
+mod scripts;
 mod unity;
 mod util;
 
@@ -43,6 +46,16 @@ enum Command {
     Scripts {
         #[command(subcommand)]
         action: ScriptsAction,
+    },
+    /// Export/import translatable text from story scripts
+    Script {
+        #[command(subcommand)]
+        action: ScriptAction,
+    },
+    /// Compare, dedup, and deharmonize script directories
+    Tools {
+        #[command(subcommand)]
+        action: ToolsAction,
     },
     /// Download Chaldea translation mappings
     Mappings {
@@ -119,6 +132,84 @@ enum ScriptsAction {
     },
 }
 
+// ── Script (translation) subcommands ──
+
+#[derive(Subcommand)]
+enum ScriptAction {
+    /// Export dialogue and choice text to JSON for translation
+    Export {
+        /// Input directory containing .txt script files
+        #[arg(short, long, default_value = "data/jp/scripts")]
+        input: String,
+        /// Output directory for .json files
+        #[arg(short, long, default_value = "data/export")]
+        output: String,
+    },
+    /// Import translated JSON back into .txt scripts
+    Import {
+        /// Input directory containing translated .json files
+        #[arg(short, long, default_value = "data/export")]
+        json_dir: String,
+        /// Original script directory (for tag verification)
+        #[arg(long, default_value = "data/jp/scripts")]
+        original: String,
+        /// Output directory for modified .txt files
+        #[arg(short, long, default_value = "data/output")]
+        output: String,
+    },
+}
+
+// ── Tools subcommands ──
+
+#[derive(Subcommand)]
+enum ToolsAction {
+    /// Copy JP-only scripts (missing from CN) to output directory
+    Compare {
+        /// JP scripts directory
+        #[arg(short, long, default_value = "data/jp/scripts")]
+        jp: String,
+        /// CN scripts directory
+        #[arg(short, long, default_value = "data/cn/scripts")]
+        cn: String,
+        /// Output directory for JP-only scripts
+        #[arg(short, long, default_value = "data/jp_only")]
+        output: String,
+    },
+    /// Remove files from translated directory that already exist in CN
+    Dedup {
+        /// CN scripts directory
+        #[arg(short, long, default_value = "data/cn/scripts")]
+        cn: String,
+        /// Translated scripts directory (files matching CN will be deleted)
+        #[arg(short, long)]
+        translated: String,
+    },
+    /// Apply anti-harmonization replacements to CN scripts
+    Deharmonize {
+        /// Input directory containing CN .txt scripts
+        #[arg(short, long, default_value = "data/cn/scripts")]
+        input: String,
+        /// Output directory for deharmonized scripts
+        #[arg(short, long, default_value = "data/cn_deharmonized")]
+        output: String,
+    },
+    /// Scan JP+CN scripts + Chaldea mappings for character name translations
+    ScanNames {
+        /// JP scripts directory
+        #[arg(long, default_value = "data/jp/scripts")]
+        jp: String,
+        /// CN scripts directory
+        #[arg(long, default_value = "data/cn/scripts")]
+        cn: String,
+        /// Mappings directory (for svt_names.json)
+        #[arg(long, default_value = "data/mappings")]
+        mappings: Option<String>,
+        /// Output JSON path
+        #[arg(short, long, default_value = "names.json")]
+        output: String,
+    },
+}
+
 // ── Mappings subcommands ──
 
 #[derive(Subcommand)]
@@ -164,6 +255,20 @@ async fn main() -> anyhow::Result<()> {
         },
         Command::Mappings { action } => match action {
             MappingsAction::Download { output } => mappings::cmd_download(&output).await?,
+        },
+        Command::Script { action } => match action {
+            ScriptAction::Export { input, output } => scripts::cmd_export(&input, &output)?,
+            ScriptAction::Import { json_dir, original, output } => {
+                scripts::cmd_import(&json_dir, &original, &output)?
+            }
+        },
+        Command::Tools { action } => match action {
+            ToolsAction::Compare { jp, cn, output } => scripts::cmd_compare(&jp, &cn, &output)?,
+            ToolsAction::Dedup { cn, translated } => scripts::cmd_dedup(&cn, &translated)?,
+            ToolsAction::Deharmonize { input, output } => scripts::cmd_deharmonize(&input, &output)?,
+            ToolsAction::ScanNames { jp, cn, mappings, output } => {
+                scripts::cmd_scan_names(&jp, &cn, mappings.as_deref(), &output)?
+            }
         },
     }
 

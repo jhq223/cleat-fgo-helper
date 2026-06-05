@@ -10,6 +10,8 @@
 
 use crate::crypto::{keys, rijndael};
 use crate::error::Result;
+use simple_rijndael::impls::RijndaelCbc;
+use simple_rijndael::paddings::Pkcs7Padding;
 
 /// Decrypt an encrypted AssetBundle .bin file.
 ///
@@ -29,7 +31,7 @@ pub fn decrypt(
 /// Normal decrypt: Rijndael CBC → Byte Swap + XOR.
 fn decrypt_normal(data: &[u8], base_data: &[u8; 32], base_top: &[u8; 32]) -> Result<Vec<u8>> {
     let decrypted =
-        rijndael::decrypt(data, base_data, base_top).map_err(|e| crate::error::Error::Crypto(e))?;
+        rijndael::decrypt(data, base_data, base_top).map_err(crate::error::Error::Crypto)?;
 
     // Byte swap + XOR
     let mut result = decrypted;
@@ -44,6 +46,7 @@ fn decrypt_normal(data: &[u8], base_data: &[u8; 32], base_top: &[u8; 32]) -> Res
 }
 
 /// Encrypt AssetBundle bytes → .bin format.
+#[allow(dead_code)]
 pub fn encrypt(data: &[u8], base_data: &[u8; 32], base_top: &[u8; 32]) -> Result<Vec<u8>> {
     // Byte swap + XOR (symmetric operation, different constants for encrypt)
     let mut xored = data.to_vec();
@@ -54,14 +57,18 @@ pub fn encrypt(data: &[u8], base_data: &[u8; 32], base_top: &[u8; 32]) -> Result
         xored[i + 1] = b1 ^ 0xD2;
     }
 
-    rijndael::encrypt(&xored, base_data, base_top).map_err(|e| crate::error::Error::Crypto(e))
+    let cipher = RijndaelCbc::<Pkcs7Padding>::new(base_data, 32)
+        .map_err(|e| crate::error::Error::Crypto(format!("rijndael init: {e:?}")))?;
+    cipher
+        .encrypt(base_top, xored)
+        .map_err(|e| crate::error::Error::Crypto(format!("rijndael encrypt: {e:?}")))
 }
 
 /// Decrypt using extra key: split key → Rijndael CBC (no post-processing).
 fn decrypt_with_extra_key(data: &[u8], key_str: &str) -> Result<Vec<u8>> {
     let (home, info) = keys::split_extra_key(key_str);
     // C# MouseHomeMain(data, home=KEY, info=IV)
-    rijndael::decrypt(data, &home, &info).map_err(|e| crate::error::Error::Crypto(e))
+    rijndael::decrypt(data, &home, &info).map_err(crate::error::Error::Crypto)
 }
 
 #[cfg(test)]

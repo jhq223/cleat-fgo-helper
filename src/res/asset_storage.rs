@@ -9,6 +9,7 @@ use std::path::{Path, PathBuf};
 ///
 /// JP: {cdn_base}/{folder_name}Android/AssetStorage.txt
 /// CN: {cdn_addr}/NewResources/Android/AssetStorage.{ver}.txt
+#[allow(clippy::too_many_arguments)]
 pub async fn fetch(
     client: &reqwest::Client,
     server: &str,
@@ -62,7 +63,7 @@ pub async fn fetch(
     );
 
     let dec_text = crypto::decrypt(&enc_text, stage_data, stage_top)
-        .map_err(|e| crate::error::Error::Crypto(e))?;
+        .map_err(crate::error::Error::Crypto)?;
 
     std::fs::write(&out_path, &dec_text)?;
     log::info!(

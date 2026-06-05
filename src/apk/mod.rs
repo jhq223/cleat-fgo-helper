@@ -227,7 +227,7 @@ fn phase_inject_so(config_apk: Option<&Path>) -> anyhow::Result<()> {
         for entry in std::fs::read_dir(&custom)? {
             let entry = entry?;
             let path = entry.path();
-            if path.extension().map_or(false, |e| e == "so") {
+            if path.extension().is_some_and(|e| e == "so") {
                 let dst = target.join(path.file_name().unwrap());
                 std::fs::copy(&path, &dst)?;
                 log::info!(
@@ -273,7 +273,7 @@ fn phase_inject_smali(mappings_dir: Option<&Path>) -> anyhow::Result<()> {
     for entry in walkdir::WalkDir::new(&smali_dir)
         .into_iter()
         .filter_map(|e| e.ok())
-        .filter(|e| e.path().extension().map_or(false, |ext| ext == "smali"))
+        .filter(|e| e.path().extension().is_some_and(|ext| ext == "smali"))
     {
         let path = entry.path();
         let content = std::fs::read_to_string(path)?;

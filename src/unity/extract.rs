@@ -23,12 +23,12 @@ pub struct TextAssetEntry {
 /// Extract TextAssets from all .unity3d files using Python UnityPy.
 pub fn extract_batch(ab_dir: &Path) -> Result<Vec<BundleTexts>> {
     let entries: Vec<_> = std::fs::read_dir(ab_dir)
-        .map_err(|e| Error::Io(e))?
+        .map_err(Error::Io)?
         .filter_map(|e| e.ok())
         .filter(|e| {
             e.path()
                 .extension()
-                .map_or(false, |ext| ext == "unity3d" || ext == "bin")
+                .is_some_and(|ext| ext == "unity3d" || ext == "bin")
         })
         .collect();
 
@@ -37,7 +37,10 @@ pub fn extract_batch(ab_dir: &Path) -> Result<Vec<BundleTexts>> {
         return Ok(Vec::new());
     }
 
-    log::info!("Extracting TextAssets from {} bundles via UnityPy...", total);
+    log::info!(
+        "Extracting TextAssets from {} bundles via UnityPy...",
+        total
+    );
 
     let script = r#"
 import sys, json, base64, os
@@ -84,25 +87,18 @@ for fname in sorted(os.listdir(ab_dir)):
 print(json.dumps({'results': results, 'errors': errors}))
 "#;
 
-    // Find python with UnityPy installed
-    let python = if cfg!(windows) {
-        // Use the known venv path
-        let venv_python = r"D:\Users\jhq223\Documents\Code\python\cleat-fgo-builder\.venv\Scripts\python.exe";
-        if std::path::Path::new(venv_python).exists() {
-            venv_python
-        } else {
-            "python"
-        }
-    } else {
-        "python3"
-    };
+    let python = if cfg!(windows) { "python" } else { "python3" };
 
     let output = Command::new(python)
         .arg("-c")
         .arg(script)
         .arg(ab_dir.to_str().unwrap_or("."))
         .output()
-        .map_err(|e| Error::Parse(format!("UnityPy not found: {e}. Install: pip install UnityPy")))?;
+        .map_err(|e| {
+            Error::Parse(format!(
+                "UnityPy not found: {e}. Install: pip install UnityPy"
+            ))
+        })?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
@@ -110,8 +106,12 @@ print(json.dumps({'results': results, 'errors': errors}))
     }
 
     let stdout = String::from_utf8_lossy(&output.stdout);
-    let parsed: serde_json::Value = serde_json::from_str(&stdout)
-        .map_err(|e| Error::Parse(format!("UnityPy JSON parse: {e} (stdout was: {}...)", &stdout[..200.min(stdout.len())])))?;
+    let parsed: serde_json::Value = serde_json::from_str(&stdout).map_err(|e| {
+        Error::Parse(format!(
+            "UnityPy JSON parse: {e} (stdout was: {}...)",
+            &stdout[..200.min(stdout.len())]
+        ))
+    })?;
 
     let mut results = Vec::new();
     if let Some(arr) = parsed["results"].as_array() {

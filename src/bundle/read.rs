@@ -33,21 +33,6 @@ pub struct ScriptBundle {
 }
 
 impl ScriptBundle {
-    /// Load the newest .script file from a directory.
-    pub fn load_dir(dir: &Path) -> Result<Self, String> {
-        let mut entries = HashMap::new();
-
-        let chosen = pick_newest(dir)?;
-        if let Some(path) = chosen {
-            log::info!("bundle: loading {}", path.display());
-            let data = std::fs::read(&path).map_err(|e| format!("read {}: {e}", path.display()))?;
-            parse_bundle(&data, &mut entries)?;
-        }
-
-        log::info!("bundle: {} entries", entries.len());
-        Ok(Self { entries })
-    }
-
     /// Load from a single .script file path.
     pub fn load_file(path: &Path) -> Result<Self, String> {
         let mut entries = HashMap::new();
@@ -56,49 +41,9 @@ impl ScriptBundle {
         Ok(Self { entries })
     }
 
-    pub fn get(&self, id: &str) -> Option<&str> {
-        self.entries.get(id).map(String::as_str)
-    }
-
     pub fn len(&self) -> usize {
         self.entries.len()
     }
-
-    pub fn is_empty(&self) -> bool {
-        self.entries.is_empty()
-    }
-}
-
-/// Pick the .script file with the largest numeric stem.
-fn pick_newest(dir: &Path) -> Result<Option<std::path::PathBuf>, String> {
-    let read_dir = match std::fs::read_dir(dir) {
-        Ok(d) => d,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-        Err(e) => return Err(format!("read_dir: {e}")),
-    };
-
-    let mut best: Option<(u64, std::path::PathBuf)> = None;
-    for entry in read_dir {
-        let entry = entry.map_err(|e| format!("dir entry: {e}"))?;
-        let path = entry.path();
-        if path.extension().and_then(|e| e.to_str()) != Some("script") {
-            continue;
-        }
-        let stem = match path.file_stem().and_then(|s| s.to_str()) {
-            Some(s) => s,
-            None => continue,
-        };
-        let num: u64 = match stem.parse() {
-            Ok(n) => n,
-            Err(_) => continue,
-        };
-        match &best {
-            Some((prev, _)) if num <= *prev => {}
-            _ => best = Some((num, path)),
-        }
-    }
-
-    Ok(best.map(|(_, p)| p))
 }
 
 struct FileInfo {
