@@ -45,8 +45,8 @@ pub async fn cmd_list(server: &str) -> Result<()> {
     }
 
     let config = crate::config::get_config(server);
-    let entries = parser::parse(&storage_path, config.server_type)
-        .map_err(crate::error::Error::Parse)?;
+    let entries =
+        parser::parse(&storage_path, config.server_type).map_err(crate::error::Error::Parse)?;
 
     let scripts = parser::find_script_assets(&entries);
 
@@ -90,8 +90,8 @@ pub async fn cmd_download(server: &str, force: bool, no_scripts: bool) -> Result
     .await?;
 
     // Step 3: Parse assets
-    let entries = parser::parse(&storage_path, config.server_type)
-        .map_err(crate::error::Error::Parse)?;
+    let entries =
+        parser::parse(&storage_path, config.server_type).map_err(crate::error::Error::Parse)?;
 
     let script_assets = parser::find_script_assets(&entries);
     log::info!("[{}] Found {} script assets", server, script_assets.len());
@@ -277,12 +277,13 @@ async fn load_or_fetch_extra_keys(
     let key_list = crate::crypto::gamedata::unpack_key_list(ab_key_b64)
         .map_err(crate::error::Error::Crypto)?;
 
-    let json =
-        serde_json::to_string_pretty(&key_list).map_err(crate::error::Error::Json)?;
+    let json = serde_json::to_string_pretty(&key_list).map_err(crate::error::Error::Json)?;
     std::fs::write(&key_path, &json)?;
 
-    let keys: HashMap<String, String> =
-        key_list.into_iter().map(|k| (k.id, k.decrypt_key)).collect();
+    let keys: HashMap<String, String> = key_list
+        .into_iter()
+        .map(|k| (k.id, k.decrypt_key))
+        .collect();
 
     log::info!(
         "[{}] Saved {} extra keys to {:?}",

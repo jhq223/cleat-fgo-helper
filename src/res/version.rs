@@ -113,19 +113,14 @@ async fn fetch_jp(client: &reqwest::Client) -> Result<VersionInfo> {
 
     // Handle app_version_up
     if let Some(fail) = response.get("fail") {
-        if fail
-            .get("action")
-            .is_some_and(|a| a == "app_version_up")
-        {
+        if fail.get("action").is_some_and(|a| a == "app_version_up") {
             let detail = fail["detail"].as_str().unwrap_or("");
             let new_ver = if let Some(re) = JP_CONFIG.version_regex {
                 let re = regex::Regex::new(re).unwrap();
                 re.captures(detail)
                     .and_then(|caps| caps.get(1))
                     .map(|m| m.as_str().to_string())
-                    .ok_or_else(|| {
-                        Error::Version(format!("Cannot parse version from: {detail}"))
-                    })?
+                    .ok_or_else(|| Error::Version(format!("Cannot parse version from: {detail}")))?
             } else {
                 return Err(Error::Version("No version regex configured".into()));
             };
@@ -146,9 +141,7 @@ async fn fetch_jp(client: &reqwest::Client) -> Result<VersionInfo> {
     if response.get("success").is_none() {
         return Err(Error::Version(format!(
             "Unexpected JP response keys: {:?}",
-            response
-                .as_object()
-                .map(|o| o.keys().collect::<Vec<_>>())
+            response.as_object().map(|o| o.keys().collect::<Vec<_>>())
         )));
     }
 
@@ -200,8 +193,7 @@ async fn fetch_jp(client: &reqwest::Client) -> Result<VersionInfo> {
         .as_str()
         .ok_or_else(|| Error::Version("No assetbundle field".into()))?;
 
-    let gd: GameData =
-        gamedata::unpack(assetbundle_b64).map_err(Error::Crypto)?;
+    let gd: GameData = gamedata::unpack(assetbundle_b64).map_err(Error::Crypto)?;
 
     log::info!("[JP] folderName: {}", gd.folder_name);
 
@@ -267,16 +259,12 @@ async fn fetch_cn(client: &reqwest::Client) -> Result<VersionInfo> {
     let nc: NetworkConfig = client.get(&nc_url).send().await?.json().await?;
     let ser_addr = &nc.list[0].android_ser[0];
     let cdn_addr = &nc.list[0].cdn[0];
-    log::info!(
-        "[CN] ser: {}...",
-        &ser_addr[..50.min(ser_addr.len())]
-    );
+    log::info!("[CN] ser: {}...", &ser_addr[..50.min(ser_addr.len())]);
     log::info!("[CN] cdn: {cdn_addr}");
 
     // Step 3: member.php — response is URL-encoded → base64 → JSON
     log::info!("[CN] Step 3: Getting game data...");
-    let gd_url =
-        format!("{ser_addr}/rongame_beta/rgfate/60_member/member.php?appVer={cn_version}");
+    let gd_url = format!("{ser_addr}/rongame_beta/rgfate/60_member/member.php?appVer={cn_version}");
     let resp_text = client.get(&gd_url).send().await?.text().await?;
 
     // URL decode → base64 decode → UTF-8 → JSON
@@ -288,11 +276,10 @@ async fn fetch_cn(client: &reqwest::Client) -> Result<VersionInfo> {
         .decode(decoded.as_bytes())
         .map_err(|e| Error::Version(format!("base64 decode: {e}")))?;
 
-    let raw_str =
-        String::from_utf8(raw).map_err(|e| Error::Version(format!("utf-8: {e}")))?;
+    let raw_str = String::from_utf8(raw).map_err(|e| Error::Version(format!("utf-8: {e}")))?;
 
-    let gd: serde_json::Value = serde_json::from_str(&raw_str)
-        .map_err(|e| Error::Version(format!("json parse: {e}")))?;
+    let gd: serde_json::Value =
+        serde_json::from_str(&raw_str).map_err(|e| Error::Version(format!("json parse: {e}")))?;
 
     // CN response: response[0].success — values may be string or number
     let success = gd["response"][0]["success"]

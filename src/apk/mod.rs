@@ -73,11 +73,13 @@ fn run(cmd: &str, args: &[&str]) -> anyhow::Result<()> {
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
         let stdout = String::from_utf8_lossy(&output.stdout);
-        let detail = if stderr.trim().is_empty() { stdout } else { stderr };
+        let detail = if stderr.trim().is_empty() {
+            stdout
+        } else {
+            stderr
+        };
         let code = output.status.code().unwrap_or(-1);
-        anyhow::bail!(
-            "{cmd} exited with code {code}\n── stderr ──\n{detail}── stderr ──"
-        );
+        anyhow::bail!("{cmd} exited with code {code}\n── stderr ──\n{detail}── stderr ──");
     }
 
     // Log stdout for debugging (truncated)

@@ -2023,7 +2023,7 @@ checksum = "e6e4313cd5fcd3dad5cafa179702e2b244f760991f45397d14d4ebf38247da75"
 [[package]]
 name = "unity-asset"
 version = "0.3.0"
-source = "git+https://github.com/Latias94/unity-asset?rev=6514a7b68cd0814e1a92b63f95ca0d6299fbfc64#6514a7b68cd0814e1a92b63f95ca0d6299fbfc64"
+source = "git+https://github.com/Latias94/unity-asset#6514a7b68cd0814e1a92b63f95ca0d6299fbfc64"
 dependencies = [
  "ignore",
  "unity-asset-binary",
@@ -2036,7 +2036,7 @@ dependencies = [
 [[package]]
 name = "unity-asset-binary"
 version = "0.3.0"
-source = "git+https://github.com/Latias94/unity-asset?rev=6514a7b68cd0814e1a92b63f95ca0d6299fbfc64#6514a7b68cd0814e1a92b63f95ca0d6299fbfc64"
+source = "git+https://github.com/Latias94/unity-asset#6514a7b68cd0814e1a92b63f95ca0d6299fbfc64"
 dependencies = [
  "binrw",
  "brotli",
@@ -2058,7 +2058,7 @@ dependencies = [
 [[package]]
 name = "unity-asset-core"
 version = "0.3.0"
-source = "git+https://github.com/Latias94/unity-asset?rev=6514a7b68cd0814e1a92b63f95ca0d6299fbfc64#6514a7b68cd0814e1a92b63f95ca0d6299fbfc64"
+source = "git+https://github.com/Latias94/unity-asset#6514a7b68cd0814e1a92b63f95ca0d6299fbfc64"
 dependencies = [
  "indexmap",
  "lazy_static",
@@ -2070,7 +2070,7 @@ dependencies = [
 [[package]]
 name = "unity-asset-write"
 version = "0.3.0"
-source = "git+https://github.com/Latias94/unity-asset?rev=6514a7b68cd0814e1a92b63f95ca0d6299fbfc64#6514a7b68cd0814e1a92b63f95ca0d6299fbfc64"
+source = "git+https://github.com/Latias94/unity-asset#6514a7b68cd0814e1a92b63f95ca0d6299fbfc64"
 dependencies = [
  "brotli",
  "flate2",
@@ -2084,7 +2084,7 @@ dependencies = [
 [[package]]
 name = "unity-asset-yaml"
 version = "0.3.0"
-source = "git+https://github.com/Latias94/unity-asset?rev=6514a7b68cd0814e1a92b63f95ca0d6299fbfc64#6514a7b68cd0814e1a92b63f95ca0d6299fbfc64"
+source = "git+https://github.com/Latias94/unity-asset#6514a7b68cd0814e1a92b63f95ca0d6299fbfc64"
 dependencies = [
  "indexmap",
  "serde",

@@ -49,4 +49,3 @@ pub fn decrypt(
         .map(|s| s.trim_end_matches('\0').to_string())
         .map_err(|e| format!("utf-8 decode: {e}"))
 }
-

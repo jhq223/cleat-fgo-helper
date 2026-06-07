@@ -21,4 +21,3 @@ pub fn decrypt(data: &[u8], key: &[u8; 32], iv: &[u8; 32]) -> Result<Vec<u8>, St
         .decrypt(iv, data.to_vec())
         .map_err(|e| format!("rijndael decrypt: {e:?}"))
 }
-

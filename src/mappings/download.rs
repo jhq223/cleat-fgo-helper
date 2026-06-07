@@ -80,6 +80,11 @@ pub async fn cmd_download(output: &str) -> Result<()> {
         }
     }
 
-    log::info!("Downloaded {}/{} mapping files to {}", count, total, dir.display());
+    log::info!(
+        "Downloaded {}/{} mapping files to {}",
+        count,
+        total,
+        dir.display()
+    );
     Ok(())
 }

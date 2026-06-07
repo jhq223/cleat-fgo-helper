@@ -29,7 +29,7 @@ hex = "0.4"
 rmp-serde = "1.3"
 regex = "1"
 futures-util = "0.3"
-unity-asset = { git = "https://github.com/Latias94/unity-asset", rev = "6514a7b68cd0814e1a92b63f95ca0d6299fbfc64" }
+unity-asset = { git = "https://github.com/Latias94/unity-asset" }
 zip = "2"
 walkdir = "2"
 urlencoding = "2"

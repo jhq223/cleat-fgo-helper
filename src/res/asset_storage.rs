@@ -62,8 +62,8 @@ pub async fn fetch(
         enc_text.len()
     );
 
-    let dec_text = crypto::decrypt(&enc_text, stage_data, stage_top)
-        .map_err(crate::error::Error::Crypto)?;
+    let dec_text =
+        crypto::decrypt(&enc_text, stage_data, stage_top).map_err(crate::error::Error::Crypto)?;
 
     std::fs::write(&out_path, &dec_text)?;
     log::info!(

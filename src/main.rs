@@ -157,6 +157,18 @@ enum ScriptAction {
         #[arg(short, long, default_value = "data/output")]
         output: String,
     },
+    /// Merge translated JSON (message-only) into original exported JSON
+    Merge {
+        /// Directory containing translated .json files (message-only format)
+        #[arg(short, long)]
+        translated: String,
+        /// Directory containing original exported .json files (full format with name/original/message)
+        #[arg(short = 'r', long, default_value = "data/export")]
+        original: String,
+        /// Output directory for merged .json files
+        #[arg(short, long)]
+        output: String,
+    },
 }
 
 // ── Tools subcommands ──
@@ -193,17 +205,11 @@ enum ToolsAction {
         #[arg(short, long, default_value = "data/cn_deharmonized")]
         output: String,
     },
-    /// Scan JP+CN scripts + Chaldea mappings for character name translations
+    /// Generate character name mappings from Chaldea svt_names.json
     ScanNames {
-        /// JP scripts directory
-        #[arg(long, default_value = "data/jp/scripts")]
-        jp: String,
-        /// CN scripts directory
-        #[arg(long, default_value = "data/cn/scripts")]
-        cn: String,
-        /// Mappings directory (for svt_names.json)
-        #[arg(long, default_value = "data/mappings")]
-        mappings: Option<String>,
+        /// Mappings directory containing svt_names.json
+        #[arg(short, long, default_value = "data/mappings")]
+        mappings: String,
         /// Output JSON path
         #[arg(short, long, default_value = "names.json")]
         output: String,
@@ -258,17 +264,27 @@ async fn main() -> anyhow::Result<()> {
         },
         Command::Script { action } => match action {
             ScriptAction::Export { input, output } => scripts::cmd_export(&input, &output)?,
-            ScriptAction::Import { json_dir, original, output } => {
-                scripts::cmd_import(&json_dir, &original, &output)?
-            }
+            ScriptAction::Import {
+                json_dir,
+                original,
+                output,
+            } => scripts::cmd_import(&json_dir, &original, &output)?,
+            ScriptAction::Merge {
+                translated,
+                original,
+                output,
+            } => scripts::cmd_merge(&translated, &original, &output)?,
         },
         Command::Tools { action } => match action {
             ToolsAction::Compare { jp, cn, output } => scripts::cmd_compare(&jp, &cn, &output)?,
             ToolsAction::Dedup { cn, translated } => scripts::cmd_dedup(&cn, &translated)?,
-            ToolsAction::Deharmonize { input, output } => scripts::cmd_deharmonize(&input, &output)?,
-            ToolsAction::ScanNames { jp, cn, mappings, output } => {
-                scripts::cmd_scan_names(&jp, &cn, mappings.as_deref(), &output)?
+            ToolsAction::Deharmonize { input, output } => {
+                scripts::cmd_deharmonize(&input, &output)?
             }
+            ToolsAction::ScanNames {
+                mappings,
+                output,
+            } => scripts::cmd_scan_names(&mappings, &output)?,
         },
     }
 
