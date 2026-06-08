@@ -102,6 +102,16 @@ pub fn find_script_assets(assets: &[AssetEntry]) -> Vec<&AssetEntry> {
         .collect()
 }
 
+/// Find the Localization asset in AssetStorage.
+pub fn find_localization_asset(assets: &[AssetEntry]) -> Option<&AssetEntry> {
+    if let Some(a) = assets.iter().find(|a| a.asset_path == "Localization") {
+        return Some(a);
+    }
+    assets
+        .iter()
+        .find(|a| a.asset_path.contains("Localization"))
+}
+
 /// Build extra_key mapping from assetbundleKey.json.
 pub fn load_extra_keys(path: &Path) -> Result<HashMap<String, String>, String> {
     let text = std::fs::read_to_string(path).map_err(|e| format!("read: {e}"))?;

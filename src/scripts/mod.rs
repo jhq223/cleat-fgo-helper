@@ -26,3 +26,4 @@ pub use names::cmd_deharmonize;
 pub use names::cmd_scan_names;
 pub use tools::cmd_compare;
 pub use tools::cmd_dedup;
+pub use tools::cmd_localize;

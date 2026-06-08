@@ -1,20 +1,19 @@
-//! Full download & decrypt pipeline orchestration.
+//! Download & decrypt pipeline orchestration.
 
 use crate::config::derive_keys;
 use crate::crypto::asset_bin;
 use crate::crypto::script;
 use crate::error::Result;
+use crate::res::parser::AssetEntry;
 use crate::res::{asset_storage, download, parser, version};
 use crate::unity;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
-/// Data directory for a server.
 fn data_dir(server: &str) -> PathBuf {
     PathBuf::from("data").join(server.to_lowercase())
 }
 
-/// Fetch version info only.
 pub async fn cmd_info(server: &str) -> Result<()> {
     let client = build_client()?;
     let info = version::fetch(&client, server).await?;
@@ -34,7 +33,6 @@ pub async fn cmd_info(server: &str) -> Result<()> {
     Ok(())
 }
 
-/// List script assets from cached AssetStorage.
 pub async fn cmd_list(server: &str) -> Result<()> {
     let dir = data_dir(server);
     let storage_path = dir.join("AssetStorage_dec.txt");
@@ -63,7 +61,6 @@ pub async fn cmd_list(server: &str) -> Result<()> {
     Ok(())
 }
 
-/// Full pipeline: version → AssetStorage → download → decrypt → extract.
 pub async fn cmd_download(server: &str, force: bool, no_scripts: bool) -> Result<()> {
     let (stage_data, stage_top, base_data, base_top) = derive_keys(server);
     let config = crate::config::get_config(server);
@@ -72,10 +69,8 @@ pub async fn cmd_download(server: &str, force: bool, no_scripts: bool) -> Result
 
     let client = build_client()?;
 
-    // Step 1: Version info
     let ver_info = version::fetch(&client, server).await?;
 
-    // Step 2: AssetStorage
     let storage_path = asset_storage::fetch(
         &client,
         server,
@@ -89,27 +84,45 @@ pub async fn cmd_download(server: &str, force: bool, no_scripts: bool) -> Result
     )
     .await?;
 
-    // Step 3: Parse assets
     let entries =
         parser::parse(&storage_path, config.server_type).map_err(crate::error::Error::Parse)?;
 
     let script_assets = parser::find_script_assets(&entries);
     log::info!("[{}] Found {} script assets", server, script_assets.len());
 
-    if no_scripts {
-        log::info!("[{}] Skipping script download (--no-scripts)", server);
-        return Ok(());
-    }
-
-    // Step 4: Load extra keys (JP only)
     let extra_keys: HashMap<String, String> = if config.server_type == "jp" {
         load_or_fetch_extra_keys(&client, server, &ver_info, &dir, force).await?
     } else {
         HashMap::new()
     };
 
-    // Step 5: Parallel download + decrypt all bundles
-    log::info!("[{}] Downloading & decrypting bundles...", server);
+    match download_localization(
+        &client,
+        server,
+        &ver_info,
+        &entries,
+        &extra_keys,
+        &base_data,
+        &base_top,
+        &dir,
+        force,
+    )
+    .await
+    {
+        Ok(paths) if paths.is_empty() => log::warn!("[{}] No Localization asset found", server),
+        Ok(paths) => {
+            let names: Vec<_> = paths.iter().map(|p| p.display().to_string()).collect();
+            log::info!("[{}] Localization saved: {}", server, names.join(", "));
+        }
+        Err(e) => log::error!("[{}] Localization download failed: {e}", server),
+    }
+
+    if no_scripts {
+        log::info!("[{}] Skipping script download (--no-scripts)", server);
+        return Ok(());
+    }
+
+    log::info!("[{}] Downloading bundles...", server);
 
     let downloaded = download::download_bundles(
         &client,
@@ -122,13 +135,11 @@ pub async fn cmd_download(server: &str, force: bool, no_scripts: bool) -> Result
     )
     .await?;
 
-    // Decrypt each bundle
     let ab_dir = dir.join("decrypted_ab");
     std::fs::create_dir_all(&ab_dir)?;
 
     let mut decrypted_paths = Vec::new();
     for (_cache_path, enc_data) in &downloaded {
-        // Find the matching asset entry
         let file_name = _cache_path.file_name().unwrap().to_str().unwrap_or("");
 
         let asset = script_assets.iter().find(|a| a.file_name == file_name);
@@ -139,8 +150,7 @@ pub async fn cmd_download(server: &str, force: bool, no_scripts: bool) -> Result
 
         let ab_data = asset_bin::decrypt(enc_data, &base_data, &base_top, real_key)?;
 
-        let unity3d_name = format!("{}.unity3d", file_name);
-        let ab_path = ab_dir.join(&unity3d_name);
+        let ab_path = ab_dir.join(format!("{}.unity3d", file_name));
         std::fs::write(&ab_path, &ab_data)?;
         decrypted_paths.push(ab_path);
     }
@@ -152,7 +162,6 @@ pub async fn cmd_download(server: &str, force: bool, no_scripts: bool) -> Result
         ab_dir.display()
     );
 
-    // Step 6: Extract TextAsset via Python (UnityPy)
     if decrypted_paths.is_empty() {
         log::warn!("[{}] No bundles to extract", server);
         return Ok(());
@@ -163,7 +172,6 @@ pub async fn cmd_download(server: &str, force: bool, no_scripts: bool) -> Result
 
     let extracted = unity::extract::extract_batch(&ab_dir)?;
 
-    // Step 7: Decrypt scripts in parallel (rayon)
     use rayon::prelude::*;
 
     let all_texts: Vec<_> = extracted
@@ -185,15 +193,9 @@ pub async fn cmd_download(server: &str, force: bool, no_scripts: bool) -> Result
         })
         .map(|(name, text)| {
             let path = scripts_dir.join(format!("{name}.txt"));
-            // Try MouseGame3 decrypt; if it fails, save raw text as-is
             match script::decrypt(text, &stage_data, &stage_top, use_bzip2) {
-                Ok(plain) => {
-                    std::fs::write(&path, &plain)?;
-                }
-                Err(_) => {
-                    // Not encrypted — save the raw text directly
-                    std::fs::write(&path, text)?;
-                }
+                Ok(plain) => std::fs::write(&path, &plain)?,
+                Err(_) => std::fs::write(&path, text)?,
             }
             Ok(path)
         })
@@ -208,7 +210,7 @@ pub async fn cmd_download(server: &str, force: bool, no_scripts: bool) -> Result
     }
 
     log::info!(
-        "[{}] Done! {} script .txt files → {}",
+        "[{}] {} script .txt files → {}",
         server,
         count,
         scripts_dir.display()
@@ -217,9 +219,86 @@ pub async fn cmd_download(server: &str, force: bool, no_scripts: bool) -> Result
     Ok(())
 }
 
+async fn download_localization(
+    client: &reqwest::Client,
+    server: &str,
+    ver_info: &version::VersionInfo,
+    entries: &[AssetEntry],
+    extra_keys: &HashMap<String, String>,
+    base_data: &[u8; 32],
+    base_top: &[u8; 32],
+    data_dir: &Path,
+    force: bool,
+) -> Result<Vec<PathBuf>> {
+    let loc_asset = match parser::find_localization_asset(entries) {
+        Some(a) => a,
+        None => return Ok(Vec::new()),
+    };
+
+    log::info!(
+        "[{}] Found Localization asset: {} ({} bytes)",
+        server,
+        loc_asset.asset_path,
+        loc_asset.size
+    );
+
+    let enc_data = download::download_bundle(
+        client,
+        server,
+        &ver_info.folder_name,
+        ver_info.cdn_addr.as_deref(),
+        loc_asset,
+        data_dir,
+        force,
+    )
+    .await?;
+
+    let real_key = loc_asset
+        .extra_key
+        .as_deref()
+        .and_then(|ek| extra_keys.get(ek).map(String::as_str));
+
+    let ab_data = crate::crypto::asset_bin::decrypt(&enc_data, base_data, base_top, real_key)
+        .map_err(|e| crate::error::Error::Crypto(format!("Localization decrypt: {e}")))?;
+
+    let tmp_ab_path = data_dir.join("_loc_temp.unity3d");
+    std::fs::write(&tmp_ab_path, &ab_data)?;
+
+    let texts = crate::unity::extract::extract_bundle_all_texts(&tmp_ab_path)?;
+    let _ = std::fs::remove_file(&tmp_ab_path);
+
+    if texts.is_empty() {
+        return Err(crate::error::Error::Parse(
+            "Localization bundle contains no TextAssets".into(),
+        ));
+    }
+
+    log::info!(
+        "[{}] Localization bundle contains {} TextAsset(s): {:?}",
+        server,
+        texts.len(),
+        texts.iter().map(|t| &t.name).collect::<Vec<_>>()
+    );
+
+    let mut saved = Vec::new();
+    for t in &texts {
+        let out_path = data_dir.join(format!("{}.txt", t.name));
+        std::fs::write(&out_path, &t.script_text)?;
+        log::info!(
+            "[{}]   → {} ({} bytes)",
+            server,
+            out_path.display(),
+            t.script_text.len()
+        );
+        saved.push(out_path);
+    }
+
+    Ok(saved)
+}
+
 fn build_client() -> Result<reqwest::Client> {
     reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(90)) // JP CDN redirect can take 40-50s
+        .timeout(std::time::Duration::from_secs(90))
         .user_agent("Dalvik/2.1.0 (Linux; U; Android 13; Pixel 6 Build/TQ2A.230505.002)")
         .build()
         .map_err(crate::error::Error::Http)
@@ -244,7 +323,6 @@ async fn load_or_fetch_extra_keys(
         }
     }
 
-    // Fetch extra keys from gamedata API (JP only)
     log::info!("[{}] Fetching assetbundleKey from gamedata...", server);
 
     let base_url = crate::config::JP_CONFIG

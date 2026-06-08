@@ -19,10 +19,62 @@ pub struct TextAssetEntry {
 
 // ── public API ────────────────────────────────────────────────────────
 
+/// Extract all TextAssets from a bundle, no script-name filter.
+pub fn extract_bundle_all_texts(bundle_path: &Path) -> Result<Vec<TextAssetEntry>> {
+    let data = std::fs::read(bundle_path).map_err(Error::Io)?;
+    let bundle = load_bundle_from_memory(data).map_err(|e| {
+        Error::Parse(format!(
+            "Failed to load bundle {}: {e}",
+            bundle_path.display()
+        ))
+    })?;
+
+    let mut texts = Vec::new();
+
+    for asset in &bundle.assets {
+        for handle in asset.object_handles() {
+            if handle.class_id() != unity_asset::class_ids::TEXT_ASSET {
+                continue;
+            }
+
+            // TypeTree-based parsing
+            if let Ok(obj) = handle.read() {
+                let name = obj
+                    .get("m_Name")
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_string());
+
+                let script = obj.get("m_Script").and_then(|v| match v {
+                    unity_asset::UnityValue::String(s) => Some(s.clone()),
+                    unity_asset::UnityValue::Bytes(b) => String::from_utf8(b.clone()).ok(),
+                    _ => None,
+                });
+
+                if let (Some(name), Some(script)) = (name, script) {
+                    texts.push(TextAssetEntry {
+                        name,
+                        script_text: script,
+                    });
+                }
+                continue;
+            }
+
+            // Fallback: raw-byte parsing for stripped IL2CPP bundles
+            if let Ok(raw) = handle.raw_data()
+                && let Some((name, script)) = parse_textasset_raw(raw)
+            {
+                texts.push(TextAssetEntry {
+                    name,
+                    script_text: script,
+                });
+            }
+        }
+    }
+
+    Ok(texts)
+}
+
 /// Extract TextAssets from all `.unity3d` files in a directory.
-///
-/// Each file is parsed in-process via `unity-asset`; no Python subprocess
-/// is needed.
 pub fn extract_batch(ab_dir: &Path) -> Result<Vec<BundleTexts>> {
     let entries: Vec<_> = std::fs::read_dir(ab_dir)
         .map_err(Error::Io)?

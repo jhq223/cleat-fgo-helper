@@ -220,6 +220,18 @@ enum ToolsAction {
         #[arg(short, long, default_value = "names.json")]
         output: String,
     },
+    /// Fill CN Chinese translations into JP LocalizationJpn.txt
+    Localize {
+        /// JP data directory (contains LocalizationJpn.txt)
+        #[arg(short, long, default_value = "data/jp")]
+        jp: String,
+        /// CN data directory (contains LocalizationJpn1.txt)
+        #[arg(short, long, default_value = "data/cn")]
+        cn: String,
+        /// Output path for merged LocalizationJpn.txt
+        #[arg(short, long, default_value = "data/jp/LocalizationJpn_cn.txt")]
+        output: String,
+    },
 }
 
 // ── Mappings subcommands ──
@@ -300,6 +312,7 @@ async fn main() -> anyhow::Result<()> {
             ToolsAction::ScanNames { mappings, output } => {
                 scripts::cmd_scan_names(&mappings, &output)?
             }
+            ToolsAction::Localize { jp, cn, output } => scripts::cmd_localize(&jp, &cn, &output)?,
         },
     }
 
