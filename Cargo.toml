@@ -1,7 +1,7 @@
 [package]
 name = "cleat-fgo-helper"
 version = "0.1.0"
-edition = "2021"
+edition = "2024"
 
 [[bin]]
 name = "fgo-helper"
@@ -10,15 +10,18 @@ path = "src/main.rs"
 [dependencies]
 clap = { version = "4", features = ["derive", "env"] }
 tokio = { version = "1", features = ["full"] }
-reqwest = { version = "0.12", features = ["json", "rustls-tls"], default-features = false }
+reqwest = { version = "0.13", features = [
+    "json",
+    "rustls",
+], default-features = false }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 simple-rijndael = "0.3"
 flate2 = "1.0"
-bzip2 = "0.4"
+bzip2 = "0.6"
 base64 = "0.22"
-sha1 = "0.10"
-md-5 = "0.10"
+sha1 = "0.11"
+md-5 = "0.11"
 rayon = "1.10"
 csv = "1.3"
 log = "0.4"
@@ -30,7 +33,7 @@ rmp-serde = "1.3"
 regex = "1"
 futures-util = "0.3"
 unity-asset = { git = "https://github.com/Latias94/unity-asset" }
-zip = "2"
+zip = "8"
 walkdir = "2"
 urlencoding = "2"
 peg = "0.8"

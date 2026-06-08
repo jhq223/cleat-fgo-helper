@@ -34,7 +34,7 @@ A Rust CLI toolchain for Fate/Grand Order (FGO) resource management, APK modific
 ## Installation
 
 ### Prerequisites
-- [Rust](https://www.rust-lang.org/) (edition 2021)
+- [Rust](https://www.rust-lang.org/) (edition 2024)
 - Java Runtime (for APK operations: apktool, apksigner)
 
 ### Build

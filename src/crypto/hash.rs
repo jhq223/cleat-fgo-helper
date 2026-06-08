@@ -12,7 +12,7 @@ pub fn md5_filename(asset_name: &str) -> String {
     let mut hasher = Md5::new();
     hasher.update(asset_name.as_bytes());
     hasher.update(MD5_SALT);
-    format!("{:x}", hasher.finalize())
+    hex::encode(hasher.finalize())
 }
 
 /// SHA1-XOR filename for regular assets.
