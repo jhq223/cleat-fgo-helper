@@ -172,11 +172,29 @@ fn phase_decompile(main_apk: &Path) -> anyhow::Result<()> {
     let manifest = out.join("AndroidManifest.xml");
     if manifest.exists() {
         let content = std::fs::read_to_string(&manifest)?;
-        let cleaned = content
-            .replace("android:isSplitRequired=\"true\"", "")
-            .replace("android:isFeatureSplit=\"true\"", "");
-        std::fs::write(&manifest, cleaned)?;
-        log::info!("  cleaned split markers from AndroidManifest.xml");
+
+        let re_split_types =
+            regex::Regex::new(r#"\s*android:(?:requiredSplitTypes|splitTypes)="[^"]*""#)?;
+        let re_splits_required = regex::Regex::new(
+            r#"<meta-data\s+android:name="com\.android\.vending\.splits\.required"\s+android:value="true"\s*/>"#,
+        )?;
+        let re_splits_res = regex::Regex::new(
+            r#"<meta-data\s+android:name="com\.android\.vending\.splits"\s+android:resource="@xml/splits\d+"\s*/>"#,
+        )?;
+        let re_derived_apk = regex::Regex::new(
+            r#"<meta-data\s+android:name="com\.android\.vending\.derived\.apk\.id"\s+android:value="\d+"\s*/>"#,
+        )?;
+
+        let cleaned = re_split_types.replace_all(&content, "");
+        let cleaned = re_splits_required.replace_all(&cleaned,
+            r#"<meta-data android:name="com.android.vending.splits.required" android:value="false"/>"#);
+        let cleaned = re_splits_res.replace_all(&cleaned, "");
+        let cleaned = re_derived_apk.replace_all(&cleaned, "");
+
+        if cleaned != content {
+            std::fs::write(&manifest, cleaned.as_bytes())?;
+            log::info!("  cleaned split markers from AndroidManifest.xml");
+        }
     }
 
     Ok(())
