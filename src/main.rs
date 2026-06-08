@@ -205,7 +205,7 @@ enum ToolsAction {
         #[arg(short, long, default_value = "data/cn_deharmonized")]
         output: String,
     },
-    /// Generate character name mappings from Chaldea svt_names.json
+    /// Generate character name mappings from Chaldea svt_names.json + td_names.json
     ScanNames {
         /// Mappings directory containing svt_names.json
         #[arg(short, long, default_value = "data/mappings")]

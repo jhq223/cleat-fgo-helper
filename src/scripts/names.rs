@@ -113,52 +113,88 @@ pub struct NameEntry {
     pub info: String,
 }
 
-/// Generate character name mappings from Chaldea svt_names.json only.
+/// Generate character name mappings from Chaldea svt_names.json
+/// (servant names) and td_names.json (Noble Phantasm names).
 pub fn cmd_scan_names(
     mappings_dir: &str,
     output_path: &str,
 ) -> anyhow::Result<()> {
     use std::collections::BTreeMap;
 
+    let base = std::path::Path::new(mappings_dir);
     let mut name_map: BTreeMap<String, (String, String)> = BTreeMap::new();
 
-    let svt_path = std::path::Path::new(mappings_dir).join("svt_names.json");
-    if !svt_path.exists() {
+    // ── Servant names (svt_names.json) ──────────────────────────────
+    let svt_path = base.join("svt_names.json");
+    if svt_path.exists() {
+        let svt_json = std::fs::read_to_string(&svt_path)?;
+        let svt_data: serde_json::Value = serde_json::from_str(&svt_json)?;
+        if let Some(obj) = svt_data.as_object() {
+            for (jp_name, lang_obj) in obj {
+                if let Some(cn_name) = lang_obj.get("CN").and_then(|v| v.as_str()) {
+                    if !cn_name.is_empty() && jp_name != cn_name {
+                        name_map
+                            .entry(jp_name.clone())
+                            .or_insert_with(|| {
+                                (cn_name.to_string(), "servant".to_string())
+                            });
+                    }
+                }
+            }
+        }
+        log::info!("Loaded svt_names.json");
+    }
+
+    // ── Noble Phantasm names (td_names.json) ────────────────────────
+    let td_path = base.join("td_names.json");
+    if td_path.exists() {
+        let td_json = std::fs::read_to_string(&td_path)?;
+        let td_data: serde_json::Value = serde_json::from_str(&td_json)?;
+        if let Some(obj) = td_data.as_object() {
+            for (jp_name, lang_obj) in obj {
+                if let Some(cn_name) = lang_obj.get("CN").and_then(|v| v.as_str()) {
+                    if !cn_name.is_empty() && jp_name != cn_name {
+                        name_map
+                            .entry(jp_name.clone())
+                            .or_insert_with(|| {
+                                (cn_name.to_string(), "np".to_string())
+                            });
+                    }
+                }
+            }
+        }
+        log::info!("Loaded td_names.json");
+    }
+
+    if name_map.is_empty() {
         anyhow::bail!(
-            "svt_names.json not found in {} – run `mappings download` first",
+            "svt_names.json and td_names.json not found in {} – run `mappings download` first",
             mappings_dir
         );
     }
 
-    let svt_json = std::fs::read_to_string(&svt_path)?;
-    let svt_data: serde_json::Value = serde_json::from_str(&svt_json)?;
-    if let Some(obj) = svt_data.as_object() {
-        for (jp_name, lang_obj) in obj {
-            if let Some(cn_name) = lang_obj.get("CN").and_then(|v| v.as_str()) {
-                if !cn_name.is_empty() && jp_name != cn_name {
-                    name_map
-                        .entry(jp_name.clone())
-                        .or_insert_with(|| (cn_name.to_string(), "Chaldea".to_string()));
-                }
-            }
-        }
-    }
-
-    log::info!("Loaded Chaldea svt_names.json: {} entries", name_map.len());
+    let svt_count = name_map.values().filter(|(_, i)| i == "servant").count();
+    let td_count = name_map.values().filter(|(_, i)| i == "np").count();
+    log::info!(
+        "Name mappings: {} servant + {} NP = {} total",
+        svt_count,
+        td_count,
+        name_map.len()
+    );
 
     let entries: Vec<NameEntry> = name_map
         .into_iter()
         .map(|(src, (dst, info))| NameEntry { src, dst, info })
         .collect();
 
-    log::info!("Total unique name mappings: {}", entries.len());
-
     let json = serde_json::to_string_pretty(&entries)?;
     std::fs::write(output_path, &json)?;
 
     println!(
-        "Exported {} name mappings to {}",
+        "Exported {} name mappings ({} servant + {} NP) to {}",
         entries.len(),
+        svt_count,
+        td_count,
         output_path
     );
     Ok(())
