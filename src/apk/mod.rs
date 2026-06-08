@@ -12,7 +12,7 @@
 //! A) Extract XAPK (ZIP) → build/xapk_out/main.apk + config.arm64_v8a.apk
 //! B) `apktool d main.apk` → build/apktool_main/
 //! C) Inject .so from config APK + resources/lib/
-//! D) Smali string replacements via chaldea mappings
+//! D) Smali injection: loadLibrary → UnityPlayerActivity
 //! E) `apktool b` + `apksigner sign` → dist/fgo-mod.apk
 
 use std::path::{Path, PathBuf};
@@ -35,16 +35,6 @@ fn xapk_out() -> PathBuf {
 fn decompiled() -> PathBuf {
     build_dir().join("apktool_main")
 }
-fn lib_dir() -> PathBuf {
-    root().join("resources").join("lib")
-}
-fn keystore_path() -> PathBuf {
-    root()
-        .join("resources")
-        .join("keystore")
-        .join("fgo_mod.keystore")
-}
-
 // ── Command helpers ──
 
 /// Run an external tool. On Windows, wraps .bat/.cmd tools via `cmd /c`
@@ -194,7 +184,7 @@ fn phase_decompile(main_apk: &Path) -> anyhow::Result<()> {
 
 // ── Phase C: Inject .so ──
 
-fn phase_inject_so(config_apk: Option<&Path>) -> anyhow::Result<()> {
+fn phase_inject_so(config_apk: Option<&Path>, custom_lib_dir: Option<&Path>) -> anyhow::Result<()> {
     log::info!("[C] Injecting .so files...");
 
     let target = decompiled().join("lib").join("arm64-v8a");
@@ -224,9 +214,10 @@ fn phase_inject_so(config_apk: Option<&Path>) -> anyhow::Result<()> {
     }
 
     // 2. Custom .so
-    let custom = lib_dir();
-    if custom.exists() {
-        for entry in std::fs::read_dir(&custom)? {
+    if let Some(ref custom) = custom_lib_dir
+        && custom.exists()
+    {
+        for entry in std::fs::read_dir(custom)? {
             let entry = entry?;
             let path = entry.path();
             if path.extension().is_some_and(|e| e == "so") {
@@ -246,103 +237,56 @@ fn phase_inject_so(config_apk: Option<&Path>) -> anyhow::Result<()> {
 
 // ── Phase D: Smali injection ──
 
-fn phase_inject_smali(mappings_dir: Option<&Path>) -> anyhow::Result<()> {
+fn phase_inject_smali() -> anyhow::Result<()> {
     log::info!("[D] Injecting Smali patches...");
 
-    let smali_dir = decompiled().join("smali");
-    if !smali_dir.exists() {
-        log::info!("  (no smali directory — skipping)");
-        return Ok(());
-    }
-
-    let mappings = match mappings_dir {
-        Some(dir) if dir.exists() => load_smali_mappings(dir)?,
-        _ => {
-            log::info!("  (no chaldea mappings — skipping string replacements)");
-            return Ok(());
-        }
-    };
-
-    if mappings.is_empty() {
-        return Ok(());
-    }
-
-    log::info!("  Loaded {} string replacements", mappings.len());
-
-    let mut replaced = 0u64;
-    let mut files_touched = 0u64;
-
-    for entry in walkdir::WalkDir::new(&smali_dir)
+    // Find UnityPlayerActivity.smali (may be under smali/ or smali_classesN/)
+    let target = walkdir::WalkDir::new(decompiled())
         .into_iter()
         .filter_map(|e| e.ok())
-        .filter(|e| e.path().extension().is_some_and(|ext| ext == "smali"))
-    {
-        let path = entry.path();
-        let content = std::fs::read_to_string(path)?;
-        let mut modified = content.clone();
+        .filter(|e| {
+            e.path().extension().is_some_and(|ext| ext == "smali")
+                && e.path()
+                    .to_string_lossy()
+                    .replace('\\', "/")
+                    .contains("com/unity3d/player/UnityPlayerActivity")
+        })
+        .map(|e| e.path().to_path_buf())
+        .next()
+        .ok_or_else(|| anyhow::anyhow!("UnityPlayerActivity.smali not found"))?;
 
-        for (from, to) in &mappings {
-            if modified.contains(from) {
-                modified = modified.replace(from, to);
-                replaced += 1;
-            }
-        }
+    log::info!("  target: {}", target.display());
 
-        if modified != content {
-            std::fs::write(path, &modified)?;
-            files_touched += 1;
-        }
+    let text = std::fs::read_to_string(&target)?;
+
+    // Skip if already injected
+    if text.contains(r#"const-string v0, "cleat_fgo""#) {
+        log::info!("  (already injected — skipping)");
+        return Ok(());
     }
 
-    log::info!("  {} replacements across {} files", replaced, files_touched);
+    // Inject loadLibrary right after super.onCreate()
+    let needle = "invoke-super {p0, p1}, Landroid/app/Activity;->onCreate(Landroid/os/Bundle;)V";
+    if let Some(pos) = text.find(needle) {
+        let end = pos + needle.len();
+        let patch = concat!(
+            "\n\n",
+            "    const-string v0, \"cleat_fgo\"\n",
+            "    invoke-static {v0}, Ljava/lang/System;->loadLibrary(Ljava/lang/String;)V\n",
+        );
+        let modified = format!("{}{}{}", &text[..end], patch, &text[end..]);
+        std::fs::write(&target, &modified)?;
+        log::info!("  injected loadLibrary");
+    } else {
+        log::warn!("  super.onCreate() not found in UnityPlayerActivity");
+    }
+
     Ok(())
-}
-
-fn load_smali_mappings(dir: &Path) -> anyhow::Result<Vec<(String, String)>> {
-    let mut mappings = Vec::new();
-
-    let categories = [
-        "svt_names",
-        "ce_names",
-        "skill_names",
-        "skill_detail",
-        "td_names",
-        "td_detail",
-        "item_names",
-        "quest_names",
-        "spot_names",
-        "event_names",
-        "war_names",
-        "buff_names",
-        "buff_detail",
-        "costume_names",
-        "mc_names",
-    ];
-
-    for cat in &categories {
-        let path = dir.join(format!("{cat}.json"));
-        if !path.exists() {
-            continue;
-        }
-        let json = std::fs::read_to_string(&path)?;
-        let map: serde_json::Value = serde_json::from_str(&json)?;
-        if let Some(obj) = map.as_object() {
-            for (jp_key, entry) in obj {
-                if let Some(cn) = entry.get("CN").and_then(|v| v.as_str()) {
-                    if jp_key != cn && !jp_key.is_empty() && !cn.is_empty() {
-                        mappings.push((jp_key.clone(), cn.to_string()));
-                    }
-                }
-            }
-        }
-    }
-
-    Ok(mappings)
 }
 
 // ── Phase E: Rebuild + sign ──
 
-fn phase_rebuild(keystore_pass: &str, alias: &str) -> anyhow::Result<()> {
+fn phase_rebuild(ks: &Path, keystore_pass: &str, alias: &str) -> anyhow::Result<()> {
     log::info!("[E] Rebuilding APK...");
 
     let apk = dist_dir().join("fgo-mod-unsigned.apk");
@@ -360,10 +304,9 @@ fn phase_rebuild(keystore_pass: &str, alias: &str) -> anyhow::Result<()> {
     let size_kb = apk.metadata()?.len() / 1024;
     log::info!("  built: {} ({} KB)", apk.display(), size_kb);
 
-    // Generate keystore if missing
-    let ks = keystore_path();
+    // Keystore must already exist — user creates it manually
     if !ks.exists() {
-        generate_keystore(&ks, keystore_pass, alias)?;
+        anyhow::bail!("Keystore not found: {}", ks.display(),);
     }
 
     // Sign
@@ -388,40 +331,9 @@ fn phase_rebuild(keystore_pass: &str, alias: &str) -> anyhow::Result<()> {
 
     let final_size_mb = signed.metadata()?.len() / 1024 / 1024;
     log::info!("  signed: {} ({} MB)", signed.display(), final_size_mb);
-    println!("\n✓ SUCCESS: {} ({} MB)", signed.display(), final_size_mb);
+    log::info!("✓ SUCCESS: {} ({} MB)", signed.display(), final_size_mb);
 
     Ok(())
-}
-
-fn generate_keystore(ks: &Path, pass: &str, alias: &str) -> anyhow::Result<()> {
-    log::info!("  generating debug keystore...");
-    if let Some(parent) = ks.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
-
-    run(
-        "keytool",
-        &[
-            "-genkey",
-            "-v",
-            "-keystore",
-            ks.to_str().unwrap(),
-            "-alias",
-            alias,
-            "-keyalg",
-            "RSA",
-            "-keysize",
-            "2048",
-            "-validity",
-            "10000",
-            "-storepass",
-            pass,
-            "-keypass",
-            pass,
-            "-dname",
-            "CN=FGO Mod, OU=Mod, O=Mod, L=Tokyo, S=Tokyo, C=JP",
-        ],
-    )
 }
 
 // ── Public commands ──
@@ -433,21 +345,20 @@ pub fn cmd_setup(xapk_path: &Path) -> anyhow::Result<()> {
 
     let (main_apk, config_apk) = phase_extract(xapk_path)?;
     phase_decompile(&main_apk)?;
-    phase_inject_so(config_apk.as_deref())?;
+    phase_inject_so(config_apk.as_deref(), None)?;
+    phase_inject_smali()?;
 
-    let mappings_dir = root().join("data").join("mappings");
-    if mappings_dir.exists() {
-        phase_inject_smali(Some(&mappings_dir))?;
-    } else {
-        phase_inject_smali(None)?;
-    }
-
-    println!("\n[SETUP DONE] Decompiled: {}", decompiled().display());
-    println!("  Next: fgo-helper apk build");
+    log::info!("[SETUP DONE] Decompiled: {}", decompiled().display());
+    log::info!("  Next: fgo-helper apk build");
     Ok(())
 }
 
-pub fn cmd_build(keystore_pass: &str, alias: &str) -> anyhow::Result<()> {
+pub fn cmd_build(
+    keystore_pass: &str,
+    alias: &str,
+    ks: &Path,
+    lib_dir: &Path,
+) -> anyhow::Result<()> {
     if !decompiled().exists() {
         anyhow::bail!(
             "{} not found. Run 'fgo-helper apk setup' first.",
@@ -455,13 +366,13 @@ pub fn cmd_build(keystore_pass: &str, alias: &str) -> anyhow::Result<()> {
         );
     }
 
-    // Re-inject smali if mappings updated
-    let mappings_dir = root().join("data").join("mappings");
-    if mappings_dir.exists() {
-        phase_inject_smali(Some(&mappings_dir))?;
-    }
+    // Inject custom .so (config .so already injected by setup)
+    phase_inject_so(None, Some(lib_dir))?;
 
-    phase_rebuild(keystore_pass, alias)?;
+    // Re-inject smali (idempotent: skips if already injected)
+    phase_inject_smali()?;
+
+    phase_rebuild(ks, keystore_pass, alias)?;
     Ok(())
 }
 
@@ -469,9 +380,9 @@ pub fn cmd_clean() -> anyhow::Result<()> {
     for d in &[build_dir(), dist_dir()] {
         if d.exists() {
             std::fs::remove_dir_all(d)?;
-            println!("Removed {}", d.display());
+            log::info!("Removed {}", d.display());
         }
     }
-    println!("Clean complete.");
+    log::info!("Clean complete.");
     Ok(())
 }

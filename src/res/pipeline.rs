@@ -18,18 +18,18 @@ fn data_dir(server: &str) -> PathBuf {
 pub async fn cmd_info(server: &str) -> Result<()> {
     let client = build_client()?;
     let info = version::fetch(&client, server).await?;
-    println!("Server: {}", server.to_uppercase());
-    println!("  appVer:      {}", info.app_ver);
-    println!("  folderName:  {}", info.folder_name);
-    println!("  dataVer:     {}", info.data_ver);
+    log::info!("Server: {}", server.to_uppercase());
+    log::info!("  appVer:      {}", info.app_ver);
+    log::info!("  folderName:  {}", info.folder_name);
+    log::info!("  dataVer:     {}", info.data_ver);
     if !info.date_ver.is_empty() {
-        println!("  dateVer:     {}", info.date_ver);
+        log::info!("  dateVer:     {}", info.date_ver);
     }
     if let Some(cdn) = &info.cdn_addr {
-        println!("  cdn:         {}", cdn);
+        log::info!("  cdn:         {}", cdn);
     }
     if let Some(asv) = &info.asset_storage_version {
-        println!("  assetStorage: {}", asv);
+        log::info!("  assetStorage: {}", asv);
     }
     Ok(())
 }
@@ -40,7 +40,7 @@ pub async fn cmd_list(server: &str) -> Result<()> {
     let storage_path = dir.join("AssetStorage_dec.txt");
 
     if !storage_path.exists() {
-        eprintln!("No cached AssetStorage. Run 'download' first.");
+        log::warn!("No cached AssetStorage. Run 'download' first.");
         return Ok(());
     }
 
@@ -50,14 +50,14 @@ pub async fn cmd_list(server: &str) -> Result<()> {
 
     let scripts = parser::find_script_assets(&entries);
 
-    println!(
+    log::info!(
         "Server: {} — {} script assets",
         server.to_uppercase(),
         scripts.len()
     );
     for s in scripts {
         let ek = s.extra_key.as_deref().unwrap_or("-");
-        println!("  {:45}  {:>8} KB  ek={}", s.asset_path, s.size / 1024, ek);
+        log::info!("  {:45}  {:>8} KB  ek={}", s.asset_path, s.size / 1024, ek);
     }
 
     Ok(())

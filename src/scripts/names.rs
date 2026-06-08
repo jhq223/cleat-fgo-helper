@@ -21,13 +21,11 @@ pub fn replace_speaker_names(content: &str, name_map: &[(String, String)]) -> St
 
         if line.starts_with("[charaSet ") || line.starts_with("[charaSet") {
             for (orig, trans) in name_map {
-                if let Some(name) = extract_chara_name(line) {
-                    if name == orig {
-                        if let Some(pos) = line.rfind(orig) {
-                            new_line =
-                                format!("{}{}{}", &line[..pos], trans, &line[pos + orig.len()..]);
-                        }
-                    }
+                if let Some(name) = extract_chara_name(line)
+                    && name == orig
+                    && let Some(pos) = line.rfind(orig)
+                {
+                    new_line = format!("{}{}{}", &line[..pos], trans, &line[pos + orig.len()..]);
                 }
             }
         } else if line.starts_with('＠') {
@@ -98,7 +96,7 @@ pub fn cmd_deharmonize(input_dir: &str, output_dir: &str) -> anyhow::Result<()> 
         }
     }
 
-    println!("Deharmonized {} files → {}", processed, output_dir);
+    log::info!("Deharmonized {} files → {}", processed, output_dir);
     Ok(())
 }
 
@@ -115,10 +113,7 @@ pub struct NameEntry {
 
 /// Generate character name mappings from Chaldea svt_names.json
 /// (servant names) and td_names.json (Noble Phantasm names).
-pub fn cmd_scan_names(
-    mappings_dir: &str,
-    output_path: &str,
-) -> anyhow::Result<()> {
+pub fn cmd_scan_names(mappings_dir: &str, output_path: &str) -> anyhow::Result<()> {
     use std::collections::BTreeMap;
 
     let base = std::path::Path::new(mappings_dir);
@@ -131,14 +126,13 @@ pub fn cmd_scan_names(
         let svt_data: serde_json::Value = serde_json::from_str(&svt_json)?;
         if let Some(obj) = svt_data.as_object() {
             for (jp_name, lang_obj) in obj {
-                if let Some(cn_name) = lang_obj.get("CN").and_then(|v| v.as_str()) {
-                    if !cn_name.is_empty() && jp_name != cn_name {
-                        name_map
-                            .entry(jp_name.clone())
-                            .or_insert_with(|| {
-                                (cn_name.to_string(), "servant".to_string())
-                            });
-                    }
+                if let Some(cn_name) = lang_obj.get("CN").and_then(|v| v.as_str())
+                    && !cn_name.is_empty()
+                    && jp_name != cn_name
+                {
+                    name_map
+                        .entry(jp_name.clone())
+                        .or_insert_with(|| (cn_name.to_string(), "servant".to_string()));
                 }
             }
         }
@@ -152,14 +146,13 @@ pub fn cmd_scan_names(
         let td_data: serde_json::Value = serde_json::from_str(&td_json)?;
         if let Some(obj) = td_data.as_object() {
             for (jp_name, lang_obj) in obj {
-                if let Some(cn_name) = lang_obj.get("CN").and_then(|v| v.as_str()) {
-                    if !cn_name.is_empty() && jp_name != cn_name {
-                        name_map
-                            .entry(jp_name.clone())
-                            .or_insert_with(|| {
-                                (cn_name.to_string(), "np".to_string())
-                            });
-                    }
+                if let Some(cn_name) = lang_obj.get("CN").and_then(|v| v.as_str())
+                    && !cn_name.is_empty()
+                    && jp_name != cn_name
+                {
+                    name_map
+                        .entry(jp_name.clone())
+                        .or_insert_with(|| (cn_name.to_string(), "np".to_string()));
                 }
             }
         }
@@ -190,7 +183,7 @@ pub fn cmd_scan_names(
     let json = serde_json::to_string_pretty(&entries)?;
     std::fs::write(output_path, &json)?;
 
-    println!(
+    log::info!(
         "Exported {} name mappings ({} servant + {} NP) to {}",
         entries.len(),
         svt_count,
@@ -199,4 +192,3 @@ pub fn cmd_scan_names(
     );
     Ok(())
 }
-

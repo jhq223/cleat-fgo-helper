@@ -26,7 +26,7 @@ pub fn cmd_compare(jp_dir: &str, cn_dir: &str, output_dir: &str) -> anyhow::Resu
         }
     }
 
-    println!("Copied {} JP-only scripts to {}", copied, output_dir);
+    log::info!("Copied {} JP-only scripts to {}", copied, output_dir);
     Ok(())
 }
 
@@ -54,9 +54,10 @@ pub fn cmd_dedup(cn_dir: &str, translated_dir: &str) -> anyhow::Result<()> {
         }
     }
 
-    println!(
+    log::info!(
         "Removed {} files from {} (already exist in CN)",
-        removed, translated_dir
+        removed,
+        translated_dir
     );
     Ok(())
 }

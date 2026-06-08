@@ -108,27 +108,26 @@ fn extract_bundle(path: &Path) -> Result<BundleTexts> {
                     _ => None,
                 });
 
-                if let (Some(name), Some(script)) = (name, script) {
-                    if is_valid_script_name(&name) {
-                        texts.push(TextAssetEntry {
-                            name,
-                            script_text: script,
-                        });
-                    }
+                if let (Some(name), Some(script)) = (name, script)
+                    && is_valid_script_name(&name)
+                {
+                    texts.push(TextAssetEntry {
+                        name,
+                        script_text: script,
+                    });
                 }
                 continue;
             }
 
             // 2) Fallback: raw-byte parsing for stripped IL2CPP bundles.
-            if let Ok(raw) = handle.raw_data() {
-                if let Some((name, script)) = parse_textasset_raw(raw) {
-                    if is_valid_script_name(&name) {
-                        texts.push(TextAssetEntry {
-                            name,
-                            script_text: script,
-                        });
-                    }
-                }
+            if let Ok(raw) = handle.raw_data()
+                && let Some((name, script)) = parse_textasset_raw(raw)
+                && is_valid_script_name(&name)
+            {
+                texts.push(TextAssetEntry {
+                    name,
+                    script_text: script,
+                });
             }
         }
     }
@@ -212,9 +211,8 @@ mod tests {
     /// `ScriptFileList` TextAsset with encrypted content.
     #[test]
     fn test_extract_scriptfilelist_bundle() {
-        let path = Path::new(
-            "data/jp/decrypted_ab/2b3c7a4706632dd61f9e7e840fedd8e368a81633.bin.unity3d",
-        );
+        let path =
+            Path::new("data/jp/decrypted_ab/2b3c7a4706632dd61f9e7e840fedd8e368a81633.bin.unity3d");
         assert!(
             path.exists(),
             "Test bundle not found: {} – run `cargo test` from the project root",
@@ -227,7 +225,10 @@ mod tests {
             result.bundle,
             "2b3c7a4706632dd61f9e7e840fedd8e368a81633.bin.unity3d"
         );
-        assert!(!result.texts.is_empty(), "Should have at least one TextAsset");
+        assert!(
+            !result.texts.is_empty(),
+            "Should have at least one TextAsset"
+        );
 
         // The bundle contains one TextAsset: "ScriptFileList"
         let sfl = result

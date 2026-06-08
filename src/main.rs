@@ -77,11 +77,17 @@ enum ApkAction {
     /// Rebuild APK + sign
     Build {
         /// Keystore password
-        #[arg(long, env = "FGO_KEYSTORE_PASS", default_value = "android")]
+        #[arg(long)]
         ks_pass: String,
         /// Key alias
-        #[arg(long, env = "FGO_KEYSTORE_ALIAS", default_value = "fgo_mod")]
+        #[arg(long)]
         ks_alias: String,
+        /// Keystore path
+        #[arg(long, default_value = "resources/keystore/fgo_mod.keystore")]
+        ks: String,
+        /// Custom .so directory (default: resources/lib)
+        #[arg(long, default_value = "resources/lib")]
+        lib_dir: String,
     },
     /// Clean build artifacts
     Clean,
@@ -239,7 +245,17 @@ async fn main() -> anyhow::Result<()> {
     match cli.command {
         Command::Apk { action } => match action {
             ApkAction::Setup { xapk } => apk::cmd_setup(std::path::Path::new(&xapk))?,
-            ApkAction::Build { ks_pass, ks_alias } => apk::cmd_build(&ks_pass, &ks_alias)?,
+            ApkAction::Build {
+                ks_pass,
+                ks_alias,
+                ks,
+                lib_dir,
+            } => apk::cmd_build(
+                &ks_pass,
+                &ks_alias,
+                std::path::Path::new(&ks),
+                std::path::Path::new(&lib_dir),
+            )?,
             ApkAction::Clean => apk::cmd_clean()?,
         },
         Command::Res { action } => match action {
@@ -281,10 +297,9 @@ async fn main() -> anyhow::Result<()> {
             ToolsAction::Deharmonize { input, output } => {
                 scripts::cmd_deharmonize(&input, &output)?
             }
-            ToolsAction::ScanNames {
-                mappings,
-                output,
-            } => scripts::cmd_scan_names(&mappings, &output)?,
+            ToolsAction::ScanNames { mappings, output } => {
+                scripts::cmd_scan_names(&mappings, &output)?
+            }
         },
     }
 

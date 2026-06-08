@@ -1,8 +1,8 @@
 //! Import translated JSON back into .txt scripts.
 
-use crate::scripts::message::{json_entry_line_starts, strip_ruby, validate_tags, MessageEntry};
+use crate::scripts::message::{MessageEntry, json_entry_line_starts, strip_ruby, validate_tags};
 use crate::scripts::names::replace_speaker_names;
-use crate::scripts::parser::{extract_chara_name, parse_script, Block};
+use crate::scripts::parser::{Block, extract_chara_name, parse_script};
 
 /// Import translated JSON back into .txt scripts.
 /// Reads the new flat format: compares `original` vs `message` to find changes.
@@ -179,11 +179,11 @@ pub fn cmd_import(json_dir: &str, original_dir: &str, output_dir: &str) -> anyho
 
         // Report tag errors grouped by file, showing JSON line number
         if !tag_errors.is_empty() {
-            eprintln!("{}:", stem);
+            log::error!("{}:", stem);
             for err in &tag_errors {
-                eprintln!("  L{}: TAG MISMATCH", err.json_line);
-                eprintln!("    original  : {}", err.original);
-                eprintln!("    translated: {}", err.translated);
+                log::error!("  L{}: TAG MISMATCH", err.json_line);
+                log::error!("    original  : {}", err.original);
+                log::error!("    translated: {}", err.translated);
             }
         }
 
@@ -223,7 +223,7 @@ pub fn cmd_import(json_dir: &str, original_dir: &str, output_dir: &str) -> anyho
         total_files += 1;
     }
 
-    println!(
+    log::info!(
         "Imported {} files to {} ({} messages applied, {} skipped)",
         total_files,
         output_dir.display(),
@@ -246,10 +246,10 @@ fn replace_block_text(content: &mut String, block: &Block, new_lines: &[String])
                 return;
             }
             for (orig, new) in lines.iter().zip(new_lines.iter()) {
-                if orig != new {
-                    if let Some(pos) = content.find(orig.as_str()) {
-                        content.replace_range(pos..pos + orig.len(), new);
-                    }
+                if orig != new
+                    && let Some(pos) = content.find(orig.as_str())
+                {
+                    content.replace_range(pos..pos + orig.len(), new);
                 }
             }
         }
@@ -263,10 +263,10 @@ fn replace_block_text(content: &mut String, block: &Block, new_lines: &[String])
                 return;
             }
             for (orig, new) in options.iter().zip(new_lines.iter()) {
-                if orig != new {
-                    if let Some(pos) = content.find(orig.as_str()) {
-                        content.replace_range(pos..pos + orig.len(), new);
-                    }
+                if orig != new
+                    && let Some(pos) = content.find(orig.as_str())
+                {
+                    content.replace_range(pos..pos + orig.len(), new);
                 }
             }
         }

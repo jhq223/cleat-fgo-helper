@@ -8,7 +8,7 @@ use std::path::Path;
 /// Pack .txt files into a .script bundle.
 pub fn cmd_txt_to_bundle(input: &str, output: &str) -> anyhow::Result<()> {
     write::pack_dir(Path::new(input), Path::new(output)).map_err(|e| anyhow::anyhow!("{e}"))?;
-    println!("Packed to {output}");
+    log::info!("Packed to {output}");
     Ok(())
 }
 
@@ -25,6 +25,6 @@ pub fn cmd_bundle_to_txt(input: &str, output: &str) -> anyhow::Result<()> {
         std::fs::write(&path, text)?;
     }
 
-    println!("Extracted {} scripts to {}", bundle.len(), output);
+    log::info!("Extracted {} scripts to {}", bundle.len(), output);
     Ok(())
 }

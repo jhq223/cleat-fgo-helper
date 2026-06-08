@@ -1,7 +1,7 @@
 //! Export dialogue and choice text to translation-friendly flat JSON.
 
 use crate::scripts::message::MessageEntry;
-use crate::scripts::parser::{parse_script, Block};
+use crate::scripts::parser::{Block, parse_script};
 
 /// Export scripts to translation-friendly flat JSON.
 /// Each .txt produces two files:
@@ -95,9 +95,11 @@ pub fn cmd_export(input_dir: &str, output_dir: &str) -> anyhow::Result<()> {
         }
     }
 
-    println!(
+    log::info!(
         "Exported {} files, {} message lines to {}",
-        total_files, total_lines, output_dir
+        total_files,
+        total_lines,
+        output_dir
     );
     Ok(())
 }

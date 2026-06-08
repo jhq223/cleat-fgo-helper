@@ -46,11 +46,11 @@ pub fn cmd_merge(translated_dir: &str, original_dir: &str, output_dir: &str) -> 
         }
 
         for (i, tr_val) in tr_values.iter().enumerate() {
-            if let Some(msg) = tr_val.get("message").and_then(|v| v.as_str()) {
-                if orig_entries[i].message != msg {
-                    orig_entries[i].message = msg.to_string();
-                    total_messages += 1;
-                }
+            if let Some(msg) = tr_val.get("message").and_then(|v| v.as_str())
+                && orig_entries[i].message != msg
+            {
+                orig_entries[i].message = msg.to_string();
+                total_messages += 1;
             }
         }
 
@@ -60,9 +60,11 @@ pub fn cmd_merge(translated_dir: &str, original_dir: &str, output_dir: &str) -> 
         merged_count += 1;
     }
 
-    println!(
+    log::info!(
         "Merged {} files to {} ({} messages updated)",
-        merged_count, output_dir, total_messages
+        merged_count,
+        output_dir,
+        total_messages
     );
     Ok(())
 }

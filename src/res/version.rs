@@ -1,6 +1,6 @@
 //! Version info fetching (JP: gamedata/top, CN: multi-step).
 
-use crate::config::{get_config, CN_CONFIG, JP_CONFIG};
+use crate::config::{CN_CONFIG, JP_CONFIG, get_config};
 use crate::crypto::gamedata::{self, GameData};
 use crate::error::{Error, Result};
 use serde::{Deserialize, Serialize};
@@ -112,29 +112,29 @@ async fn fetch_jp(client: &reqwest::Client) -> Result<VersionInfo> {
     let mut response = &data["response"][0];
 
     // Handle app_version_up
-    if let Some(fail) = response.get("fail") {
-        if fail.get("action").is_some_and(|a| a == "app_version_up") {
-            let detail = fail["detail"].as_str().unwrap_or("");
-            let new_ver = if let Some(re) = JP_CONFIG.version_regex {
-                let re = regex::Regex::new(re).unwrap();
-                re.captures(detail)
-                    .and_then(|caps| caps.get(1))
-                    .map(|m| m.as_str().to_string())
-                    .ok_or_else(|| Error::Version(format!("Cannot parse version from: {detail}")))?
-            } else {
-                return Err(Error::Version("No version regex configured".into()));
-            };
+    if let Some(fail) = response.get("fail")
+        && fail.get("action").is_some_and(|a| a == "app_version_up")
+    {
+        let detail = fail["detail"].as_str().unwrap_or("");
+        let new_ver = if let Some(re) = JP_CONFIG.version_regex {
+            let re = regex::Regex::new(re).unwrap();
+            re.captures(detail)
+                .and_then(|caps| caps.get(1))
+                .map(|m| m.as_str().to_string())
+                .ok_or_else(|| Error::Version(format!("Cannot parse version from: {detail}")))?
+        } else {
+            return Err(Error::Version("No version regex configured".into()));
+        };
 
-            log::info!("[JP] Version upgrade: {new_ver}");
-            cache.app_ver = new_ver;
-            cache.data_ver.clear(); // force re-download
-            cache.date_ver.clear();
-            save_jp_cache(&cache);
+        log::info!("[JP] Version upgrade: {new_ver}");
+        cache.app_ver = new_ver;
+        cache.data_ver.clear(); // force re-download
+        cache.date_ver.clear();
+        save_jp_cache(&cache);
 
-            let new_url = format!("{base_url}?appVer={}", cache.app_ver);
-            data = client.get(&new_url).send().await?.json().await?;
-            response = &data["response"][0];
-        }
+        let new_url = format!("{base_url}?appVer={}", cache.app_ver);
+        data = client.get(&new_url).send().await?.json().await?;
+        response = &data["response"][0];
     }
 
     // Check success or handle redirect-based response
