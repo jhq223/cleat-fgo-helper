@@ -40,7 +40,7 @@ A Rust CLI toolchain for Fate/Grand Order (FGO) resource management, APK modific
 ### Build
 
 ```bash
-git clone https://github.com/yourusername/cleat-fgo-helper.git
+git clone https://github.com/jhq223/cleat-fgo-helper.git
 cd cleat-fgo-helper
 cargo build --release
 ```
