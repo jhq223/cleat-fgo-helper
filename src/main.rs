@@ -6,7 +6,7 @@
 //!   res download|info|list <jp|cn|all>
 //!   scripts txt-to-bundle|bundle-to-txt
 //!   script export|import
-//!   tools compare|dedup|deharmonize
+//!   tools compare|deharmonize
 //!   mappings download
 //! ```
 
@@ -19,7 +19,6 @@ mod mappings;
 mod res;
 mod scripts;
 mod unity;
-mod util;
 
 use clap::{Parser, Subcommand};
 
@@ -52,7 +51,7 @@ enum Command {
         #[command(subcommand)]
         action: ScriptAction,
     },
-    /// Compare, dedup, and deharmonize script directories
+    /// Compare and deharmonize script directories
     Tools {
         #[command(subcommand)]
         action: ToolsAction,
@@ -193,15 +192,6 @@ enum ToolsAction {
         #[arg(short, long, default_value = "data/jp_only")]
         output: String,
     },
-    /// Remove files from translated directory that already exist in CN
-    Dedup {
-        /// CN scripts directory
-        #[arg(short, long, default_value = "data/cn/scripts")]
-        cn: String,
-        /// Translated scripts directory (files matching CN will be deleted)
-        #[arg(short, long)]
-        translated: String,
-    },
     /// Apply anti-harmonization replacements to CN scripts
     Deharmonize {
         /// Input directory containing CN .txt scripts
@@ -305,7 +295,6 @@ async fn main() -> anyhow::Result<()> {
         },
         Command::Tools { action } => match action {
             ToolsAction::Compare { jp, cn, output } => scripts::cmd_compare(&jp, &cn, &output)?,
-            ToolsAction::Dedup { cn, translated } => scripts::cmd_dedup(&cn, &translated)?,
             ToolsAction::Deharmonize { input, output } => {
                 scripts::cmd_deharmonize(&input, &output)?
             }

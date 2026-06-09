@@ -7,7 +7,7 @@
 //! - `export`  : flat-JSON export of dialogue + choices
 //! - `import`  : import translated JSON back into .txt scripts
 //! - `merge`   : merge message-only translated JSON into full-format originals
-//! - `tools`   : directory comparison and deduplication
+//! - `tools`   : directory comparison
 //! - `tests`   : parser unit tests
 
 pub mod export;
@@ -27,4 +27,3 @@ pub use merge::cmd_merge;
 pub use names::cmd_deharmonize;
 pub use names::cmd_scan_names;
 pub use tools::cmd_compare;
-pub use tools::cmd_dedup;

@@ -67,6 +67,24 @@ pub async fn cmd_download(server: &str, force: bool, no_scripts: bool) -> Result
     let dir = data_dir(server);
     std::fs::create_dir_all(&dir)?;
 
+    let keys_path = std::path::PathBuf::from("resources/keys.json");
+    if !keys_path.exists() {
+        log::error!(
+            "FATAL: resources/keys.json not found. This file is required for script decryption."
+        );
+        return Err(crate::error::Error::NotFound(
+            "resources/keys.json is required but not found".into(),
+        ));
+    }
+    let keys_file = std::fs::File::open(&keys_path)?;
+    let script_keys: Vec<script::KeyEntry> =
+        serde_json::from_reader(keys_file)?;
+    log::info!(
+        "[{}] Loaded {} keys from resources/keys.json",
+        server,
+        script_keys.len()
+    );
+
     let client = build_client()?;
 
     let ver_info = version::fetch(&client, server).await?;
@@ -195,7 +213,14 @@ pub async fn cmd_download(server: &str, force: bool, no_scripts: bool) -> Result
             let path = scripts_dir.join(format!("{name}.txt"));
             match script::decrypt(text, &stage_data, &stage_top, use_bzip2) {
                 Ok(plain) => std::fs::write(&path, &plain)?,
-                Err(_) => std::fs::write(&path, text)?,
+                Err(_) => {
+                    if let Some(plain) = script::decrypt_with_keys(text, &script_keys) {
+                        std::fs::write(&path, &plain)?;
+                    } else {
+                        log::error!("[{}] Decrypt failed for '{}', saving raw base64", server, name);
+                        std::fs::write(&path, text)?;
+                    }
+                }
             }
             Ok(path)
         })
