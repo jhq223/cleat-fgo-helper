@@ -259,15 +259,17 @@ fn phase_inject_smali() -> anyhow::Result<()> {
     log::info!("[D] Injecting Smali patches...");
 
     // Find UnityPlayerActivity.smali (may be under smali/ or smali_classesN/)
+    // NOTE: Newer Unity versions also create a UnityPlayerActivity/ subdirectory
+    // containing R$*.smali files. Use exact file name match to avoid picking those.
     let target = walkdir::WalkDir::new(decompiled())
         .into_iter()
         .filter_map(|e| e.ok())
         .filter(|e| {
-            e.path().extension().is_some_and(|ext| ext == "smali")
+            e.file_name().to_string_lossy() == "UnityPlayerActivity.smali"
                 && e.path()
                     .to_string_lossy()
                     .replace('\\', "/")
-                    .contains("com/unity3d/player/UnityPlayerActivity")
+                    .contains("/com/unity3d/player/")
         })
         .map(|e| e.path().to_path_buf())
         .next()
