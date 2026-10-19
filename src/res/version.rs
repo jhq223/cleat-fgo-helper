@@ -20,7 +20,7 @@ struct JpCache {
 }
 
 /// Fetched version info.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct VersionInfo {
     pub app_ver: String,
     pub folder_name: String,
@@ -31,6 +31,9 @@ pub struct VersionInfo {
     pub cdn_addr: Option<String>,
     /// CN only: assetStorageVersion
     pub asset_storage_version: Option<String>,
+    /// Keys belong to this version response; never mix them with another cache.
+    #[serde(skip)]
+    pub resource_keys: Vec<gamedata::AssetBundleKey>,
 }
 
 /// Fetch version info for a server.
@@ -106,7 +109,7 @@ async fn fetch_jp(client: &reqwest::Client) -> Result<VersionInfo> {
     log::debug!("[JP] Request: {url}");
 
     // Use a client with longer timeout for JP (CDN redirect can be slow)
-    let resp = client.get(&url).send().await?;
+    let resp = client.get(&url).send().await?.error_for_status()?;
     let mut data: serde_json::Value = resp.json().await?;
 
     let mut response = &data["response"][0];
@@ -133,7 +136,13 @@ async fn fetch_jp(client: &reqwest::Client) -> Result<VersionInfo> {
         save_jp_cache(&cache);
 
         let new_url = format!("{base_url}?appVer={}", cache.app_ver);
-        data = client.get(&new_url).send().await?.json().await?;
+        data = client
+            .get(&new_url)
+            .send()
+            .await?
+            .error_for_status()?
+            .json()
+            .await?;
         response = &data["response"][0];
     }
 
@@ -148,6 +157,15 @@ async fn fetch_jp(client: &reqwest::Client) -> Result<VersionInfo> {
     let success = response["success"]
         .as_object()
         .ok_or_else(|| Error::Version("No success object".into()))?;
+
+    let resource_keys = success
+        .get("assetbundleKey")
+        .and_then(|v| v.as_str())
+        .filter(|value| !value.is_empty())
+        .map(gamedata::unpack_key_list)
+        .transpose()
+        .map_err(Error::Crypto)?
+        .unwrap_or_default();
 
     // Extract server-side dataVer/dateVer (numbers)
     let sv_data_ver = success["dataVer"]
@@ -177,6 +195,7 @@ async fn fetch_jp(client: &reqwest::Client) -> Result<VersionInfo> {
             date_ver: sv_date_ver,
             cdn_addr: None,
             asset_storage_version: None,
+            resource_keys,
         });
     }
 
@@ -210,6 +229,7 @@ async fn fetch_jp(client: &reqwest::Client) -> Result<VersionInfo> {
         date_ver: cache.date_ver,
         cdn_addr: None,
         asset_storage_version: None,
+        resource_keys,
     })
 }
 
@@ -256,16 +276,33 @@ async fn fetch_cn(client: &reqwest::Client) -> Result<VersionInfo> {
         .as_ref()
         .unwrap()
         .replace("{version}", &cn_version);
-    let nc: NetworkConfig = client.get(&nc_url).send().await?.json().await?;
-    let ser_addr = &nc.list[0].android_ser[0];
-    let cdn_addr = &nc.list[0].cdn[0];
-    log::info!("[CN] ser: {}...", &ser_addr[..50.min(ser_addr.len())]);
+    let nc: NetworkConfig = client
+        .get(&nc_url)
+        .send()
+        .await?
+        .error_for_status()?
+        .json()
+        .await?;
+    let config = nc
+        .list
+        .first()
+        .ok_or_else(|| Error::Version("empty CN network list".into()))?;
+    let ser_addr = config
+        .android_ser
+        .first()
+        .ok_or_else(|| Error::Version("missing CN server".into()))?;
+    let cdn_addr = config
+        .cdn
+        .first()
+        .ok_or_else(|| Error::Version("missing CN CDN".into()))?;
     log::info!("[CN] cdn: {cdn_addr}");
 
     // Step 3: member.php — response is URL-encoded → base64 → JSON
     log::info!("[CN] Step 3: Getting game data...");
     let gd_url = format!("{ser_addr}/rongame_beta/rgfate/60_member/member.php?appVer={cn_version}");
-    let resp_text = client.get(&gd_url).send().await?.text().await?;
+    let resp_text =
+        String::from_utf8(crate::storage::get(client, &gd_url, 16 * 1024 * 1024).await?)
+            .map_err(|e| Error::Version(e.to_string()))?;
 
     // URL decode → base64 decode → UTF-8 → JSON
     let decoded =
@@ -313,5 +350,6 @@ async fn fetch_cn(client: &reqwest::Client) -> Result<VersionInfo> {
         date_ver: String::new(),
         cdn_addr: Some(cdn_addr.clone()),
         asset_storage_version,
+        resource_keys: Vec::new(),
     })
 }

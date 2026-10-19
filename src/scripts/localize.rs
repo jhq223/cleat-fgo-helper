@@ -37,7 +37,10 @@ pub fn cmd_localize(jp_base: &str, cn_ref: &str, output: &str) -> anyhow::Result
     let mut overwritten = 0u64;
     let mut entries: Vec<(String, String)> = Vec::with_capacity(jp_map.len());
     for (key, jp_val) in &jp_map {
-        if let Some(cn_val) = cn_map.get(key) {
+        if let Some(cn_val) = cn_map
+            .get(key)
+            .filter(|cn| !cn.trim().is_empty() && placeholders_match(jp_val, cn))
+        {
             entries.push((key.clone(), cn_val.clone()));
             overwritten += 1;
         } else {
@@ -49,7 +52,7 @@ pub fn cmd_localize(jp_base: &str, cn_ref: &str, output: &str) -> anyhow::Result
     let out_text = build_output(&entries);
     let out_bytes = encode_utf16le_crlf(&out_text);
 
-    std::fs::write(out_path, &out_bytes)?;
+    crate::storage::atomic_write(out_path, &out_bytes)?;
     log::info!(
         "Saved: {} ({} bytes, UTF-16LE)",
         out_path.display(),
@@ -59,116 +62,74 @@ pub fn cmd_localize(jp_base: &str, cn_ref: &str, output: &str) -> anyhow::Result
     Ok(())
 }
 
+fn placeholders_match(source: &str, translated: &str) -> bool {
+    static PATTERN: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
+        regex::Regex::new(
+            r"\{\d+(?:[^{}]*)\}|%(?:\d+\$)?[-+0 #]*\d*(?:\.\d+)?[sdfi]|\[[a-zA-Z_][a-zA-Z_0-9]*\]",
+        )
+        .unwrap()
+    });
+    let tokens = |text: &str| {
+        let mut values: Vec<_> = PATTERN
+            .find_iter(text)
+            .map(|m| m.as_str().to_owned())
+            .collect();
+        values.sort();
+        values
+    };
+    tokens(source) == tokens(translated)
+}
+
 fn parse_localization_json(text: &str) -> anyhow::Result<IndexMap<String, String>> {
-    let chars: Vec<char> = text.chars().collect();
-    let len = chars.len();
-    let mut pos = 0usize;
-    let mut map = IndexMap::new();
-
-    skip_ws(&chars, &mut pos, len);
-    expect_char(&chars, &mut pos, len, '{')?;
-
-    loop {
-        skip_ws(&chars, &mut pos, len);
-        if pos < len && chars[pos] == '}' {
-            break;
-        }
-
-        let key = read_string(&chars, &mut pos, len)?;
-        skip_ws(&chars, &mut pos, len);
-        expect_char(&chars, &mut pos, len, ':')?;
-        skip_ws(&chars, &mut pos, len);
-        let value = read_string(&chars, &mut pos, len)?;
-
-        map.insert(key, value);
-
-        skip_ws(&chars, &mut pos, len);
-        while pos < len && chars[pos] == ',' {
-            pos += 1;
-            skip_ws(&chars, &mut pos, len);
-        }
-    }
-
-    Ok(map)
-}
-
-fn skip_ws(chars: &[char], pos: &mut usize, len: usize) {
-    while *pos < len {
-        let c = chars[*pos];
-        if c == ' ' || c == '\t' || c == '\r' || c == '\n' || c == '\u{3000}' || c == '\u{A0}' {
-            *pos += 1;
-        } else if c == '/' && *pos + 1 < len && chars[*pos + 1] == '/' {
-            *pos += 2;
-            while *pos < len && chars[*pos] != '\n' {
-                *pos += 1;
-            }
+    // The client also accepts full-width whitespace outside JSON strings.
+    // Keep strings/comments intact and leave JSON parsing to the parser crate.
+    static TOKENS: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
+        regex::Regex::new(r#""(?:\\.|[^"\\])*"|//[^\r\n]*|/\*[\s\S]*?\*/|[^\S\x00-\x7F]"#).unwrap()
+    });
+    let normalized = TOKENS.replace_all(text, |token: &regex::Captures<'_>| {
+        if token[0].chars().all(char::is_whitespace) {
+            " ".to_owned()
         } else {
-            break;
+            token[0].to_owned()
         }
-    }
-}
-
-fn expect_char(chars: &[char], pos: &mut usize, len: usize, expected: char) -> anyhow::Result<()> {
-    if *pos >= len {
-        anyhow::bail!("Unexpected EOF, expected '{expected}'");
-    }
-    if chars[*pos] != expected {
-        let start = (*pos).saturating_sub(10);
-        let end = (*pos + 10).min(len);
-        let ctx: String = chars[start..end].iter().collect();
-        anyhow::bail!(
-            "Expected '{expected}' at pos {pos}, got '{}'. Context: ...{ctx}...",
-            chars[*pos]
-        );
-    }
-    *pos += 1;
-    Ok(())
-}
-
-fn read_string(chars: &[char], pos: &mut usize, len: usize) -> anyhow::Result<String> {
-    expect_char(chars, pos, len, '"')?;
-
-    let mut s = String::new();
-
-    while *pos < len {
-        let c = chars[*pos];
-        *pos += 1;
-        match c {
-            '"' => return Ok(s),
-            '\\' if *pos < len => {
-                let next = chars[*pos];
-                *pos += 1;
-                match next {
-                    '"' => s.push('"'),
-                    '\\' => s.push('\\'),
-                    '/' => s.push('/'),
-                    'b' => s.push('\x08'),
-                    'f' => s.push('\x0C'),
-                    'n' => s.push('\n'),
-                    'r' => s.push('\r'),
-                    't' => s.push('\t'),
-                    'u' => {
-                        if *pos + 4 > len {
-                            anyhow::bail!("Truncated \\u escape");
-                        }
-                        let hex: String = chars[*pos..*pos + 4].iter().collect();
-                        *pos += 4;
-                        let cp = u32::from_str_radix(&hex, 16)
-                            .map_err(|_| anyhow::anyhow!("Invalid unicode escape \\u{hex}"))?;
-                        s.push(char::from_u32(cp).unwrap_or('\u{FFFD}'));
-                    }
-                    other => {
-                        // Unknown escape: keep both chars literally
-                        s.push('\\');
-                        s.push(other);
-                    }
-                }
-            }
-            other => s.push(other),
+    });
+    // Some shipped JP files omit the comma between consecutive string entries.
+    // Only repair adjacent string tokens; malformed values still fail parsing.
+    let mut repaired = String::with_capacity(normalized.len());
+    static COMMAS: std::sync::LazyLock<regex::Regex> =
+        std::sync::LazyLock::new(|| regex::Regex::new(r",(?:\s*,)+").unwrap());
+    let mut end = 0;
+    let mut previous_string = false;
+    for token in TOKENS.find_iter(&normalized) {
+        let gap = &normalized[end..token.start()];
+        if !gap.trim().is_empty() {
+            previous_string = false;
         }
+        let is_string = token.as_str().starts_with('"');
+        repaired.push_str(&COMMAS.replace_all(gap, ","));
+        if previous_string && is_string && gap.trim().is_empty() {
+            repaired.push(',');
+        }
+        repaired.push_str(token.as_str());
+        if is_string {
+            previous_string = true;
+        } else if !token.as_str().starts_with("//") && !token.as_str().starts_with("/*") {
+            previous_string = false;
+        }
+        end = token.end();
     }
-
-    anyhow::bail!("Unterminated string at pos {pos}");
+    repaired.push_str(&COMMAS.replace_all(&normalized[end..], ","));
+    let mut parser = serde_json_lenient::Deserializer::from_slice_with_options(
+        repaired.trim_start_matches('\u{feff}').as_bytes(),
+        false,
+        true,
+        true,
+        false,
+        false,
+    );
+    let values = <IndexMap<String, String> as serde::Deserialize>::deserialize(&mut parser)?;
+    parser.end()?;
+    Ok(values)
 }
 
 fn build_output(entries: &[(String, String)]) -> String {
@@ -193,33 +154,11 @@ fn build_output(entries: &[(String, String)]) -> String {
 }
 
 fn json_escape(s: &str) -> String {
-    let mut out = String::with_capacity(s.len());
-    for c in s.chars() {
-        match c {
-            '"' => out.push_str("\\\""),
-            '\\' => out.push_str("\\\\"),
-            other => out.push(other),
-        }
-    }
-    out
+    json_escape_value(s)
 }
-
 fn json_escape_value(s: &str) -> String {
-    let mut out = String::with_capacity(s.len());
-    for c in s.chars() {
-        match c {
-            '"' => out.push_str("\\\""),
-            '\\' => out.push_str("\\\\"),
-            '\n' => out.push_str("\\n"),
-            '\r' => out.push_str("\\r"),
-            '\t' => out.push_str("\\t"),
-            c if (c as u32) < 0x20 => {
-                out.push_str(&format!("\\u{:04X}", c as u32));
-            }
-            other => out.push(other),
-        }
-    }
-    out
+    let quoted = serde_json::to_string(s).expect("string serialization");
+    quoted[1..quoted.len() - 1].to_owned()
 }
 
 fn encode_utf16le_crlf(text: &str) -> Vec<u8> {
@@ -236,6 +175,36 @@ fn encode_utf16le_crlf(text: &str) -> Vec<u8> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn preserves_unicode_and_format_arguments() {
+        assert_eq!(
+            parse_localization_json("{\"a\":\"A,,B\",,\n\"b\":\"B\",,}").unwrap()["a"],
+            "A,,B"
+        );
+        assert_eq!(
+            parse_localization_json("{\"a\":\"A\"\n// comment\n\"b\":\"B\"}")
+                .unwrap()
+                .len(),
+            2
+        );
+        assert_eq!(
+            parse_localization_json("{\"a\":\"A\"\n\"b\":\"B\"}")
+                .unwrap()
+                .len(),
+            2
+        );
+        assert_eq!(
+            parse_localization_json("{\"key\":　\"文字　文字\"}").unwrap()["key"],
+            "文字　文字"
+        );
+        assert_eq!(
+            parse_localization_json(r#"{"emoji":"\uD83D\uDE00",}"#).unwrap()["emoji"],
+            "😀"
+        );
+        assert!(!placeholders_match("{0} {1}", "{0}"));
+        assert!(placeholders_match("{0} {1}", "{1} {0}"));
+        assert!(!placeholders_match("[servantName]", "名字"));
+    }
 
     #[test]
     fn test_parse_jp_format() {
@@ -290,7 +259,9 @@ mod tests {
         assert_eq!(bytes[1], 0xFE);
         let decoded: String = char::decode_utf16(
             bytes[2..]
-                .chunks_exact(2)
+                .as_chunks::<2>()
+                .0
+                .iter()
                 .map(|c| u16::from_le_bytes([c[0], c[1]])),
         )
         .map(|r| r.unwrap())

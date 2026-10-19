@@ -17,11 +17,6 @@ pub async fn download_bundle(
 ) -> Result<Vec<u8>> {
     let cache_path = data_dir.join("cache").join(&asset.file_name);
 
-    if cache_path.exists() && !force {
-        log::debug!("  cached: {}", asset.file_name);
-        return Ok(std::fs::read(&cache_path)?);
-    }
-
     let config = get_config(server);
     let is_cn = config.server_type == "cn";
 
@@ -40,25 +35,21 @@ pub async fn download_bundle(
     };
 
     log::debug!("  GET {}", url);
-
-    let resp = client.get(&url).send().await?;
-
-    if !resp.status().is_success() {
-        let status = resp.status();
-        let url_str = url.clone();
-        return Err(crate::error::Error::Crypto(format!(
-            "HTTP {} for {} ({})",
-            status, asset.file_name, url_str
+    const LIMIT: usize = 128 * 1024 * 1024;
+    let identity = format!("{url}|{}|{}", asset.revision, asset.size);
+    if !force && let Some(bytes) = crate::storage::read_cache(&cache_path, &identity, LIMIT) {
+        return Ok(bytes);
+    }
+    let data = crate::storage::get(client, &url, LIMIT).await?;
+    if data.is_empty() || (asset.size != 0 && data.len() as u64 != asset.size) {
+        return Err(crate::error::Error::Parse(format!(
+            "{}: downloaded {} bytes, expected {}",
+            asset.asset_path,
+            data.len(),
+            asset.size
         )));
     }
-
-    let data = resp.bytes().await?.to_vec();
-
-    // Cache to disk
-    if let Some(parent) = cache_path.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
-    std::fs::write(&cache_path, &data)?;
+    crate::storage::write_cache(&cache_path, &identity, &data)?;
 
     Ok(data)
 }
@@ -105,10 +96,11 @@ pub async fn download_bundles(
         .await;
 
     let mut succeeded = Vec::new();
+    let mut failures = Vec::new();
     for result in results {
         match result {
             Ok(v) => succeeded.push(v),
-            Err(e) => log::error!("Download failed: {e}"),
+            Err(e) => failures.push(e.to_string()),
         }
     }
 
@@ -118,5 +110,13 @@ pub async fn download_bundles(
         succeeded.len(),
         total
     );
+    if !failures.is_empty() {
+        return Err(crate::error::Error::Parse(format!(
+            "{}/{} bundle downloads failed: {}",
+            failures.len(),
+            total,
+            failures.join("; ")
+        )));
+    }
     Ok(succeeded)
 }

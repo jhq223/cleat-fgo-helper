@@ -9,7 +9,6 @@
 //!   hash, name, size, state, path, ?, ?
 
 use crate::crypto::hash;
-use std::collections::HashMap;
 use std::path::Path;
 
 /// A single asset entry from AssetStorage.
@@ -19,6 +18,8 @@ pub struct AssetEntry {
     pub file_name: String,
     pub size: u64,
     pub extra_key: Option<String>,
+    /// Server-provided revision/CRC, part of the download cache identity.
+    pub revision: String,
 }
 
 /// Parse AssetStorage CSV file.
@@ -55,6 +56,7 @@ pub fn parse_text(text: &str, server_type: &str) -> Result<Vec<AssetEntry>, Stri
                 file_name,
                 size,
                 extra_key: None,
+                revision: parts[3].to_owned(),
             });
         } else {
             // JP: type, hash, size, flag, asset_path [, extra_key]
@@ -85,6 +87,7 @@ pub fn parse_text(text: &str, server_type: &str) -> Result<Vec<AssetEntry>, Stri
                 file_name,
                 size: parts[2].parse::<u64>().unwrap_or(0),
                 extra_key,
+                revision: parts[3].to_owned(),
             });
         }
     }
@@ -110,20 +113,4 @@ pub fn find_localization_asset(assets: &[AssetEntry]) -> Option<&AssetEntry> {
     assets
         .iter()
         .find(|a| a.asset_path.contains("Localization"))
-}
-
-/// Build extra_key mapping from assetbundleKey.json.
-pub fn load_extra_keys(path: &Path) -> Result<HashMap<String, String>, String> {
-    let text = std::fs::read_to_string(path).map_err(|e| format!("read: {e}"))?;
-
-    #[derive(serde::Deserialize)]
-    struct KeyEntry {
-        id: String,
-        #[serde(rename = "decryptKey")]
-        decrypt_key: String,
-    }
-
-    let list: Vec<KeyEntry> = serde_json::from_str(&text).map_err(|e| format!("json: {e}"))?;
-
-    Ok(list.into_iter().map(|k| (k.id, k.decrypt_key)).collect())
 }

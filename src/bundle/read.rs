@@ -19,13 +19,9 @@ use std::collections::HashMap;
 use std::io::{Cursor, Read};
 use std::path::Path;
 
-use simple_rijndael::impls::RijndaelCbc;
-use simple_rijndael::paddings::Pkcs7Padding;
-
 const MAGIC: i32 = 0x7A684244;
 const KEY: &[u8; 32] = b"mYq3t6v9y$B&E)H@McQfTjWnZr4u7x!z";
 const IV: &[u8; 32] = b"TjWnZr4u7x!A%D*G-KaNdRgUkXp2s5v8";
-const BLOCK_SIZE: usize = 32;
 
 /// Loaded script entries: asset ID → plaintext content.
 pub struct ScriptBundle {
@@ -36,6 +32,9 @@ impl ScriptBundle {
     /// Load from a single .script file path.
     pub fn load_file(path: &Path) -> Result<Self, String> {
         let mut entries = HashMap::new();
+        if std::fs::metadata(path).map_err(|e| e.to_string())?.len() > 128 * 1024 * 1024 {
+            return Err("bundle exceeds size limit".into());
+        }
         let data = std::fs::read(path).map_err(|e| format!("read {}: {e}", path.display()))?;
         parse_bundle(&data, &mut entries)?;
         Ok(Self { entries })
@@ -65,7 +64,11 @@ fn parse_bundle(data: &[u8], out: &mut HashMap<String, String>) -> Result<(), St
 
     cur.read_exact(&mut buf)
         .map_err(|e| format!("count: {e}"))?;
-    let file_count = i32::from_be_bytes(buf) as usize;
+    let file_count =
+        usize::try_from(i32::from_be_bytes(buf)).map_err(|_| "negative bundle count")?;
+    if file_count > 100_000 || file_count > data.len().saturating_sub(8) / 14 {
+        return Err("invalid bundle entry count".into());
+    }
 
     // Read file info entries
     let mut infos = Vec::with_capacity(file_count);
@@ -84,6 +87,9 @@ fn parse_bundle(data: &[u8], out: &mut HashMap<String, String>) -> Result<(), St
         cur.read_exact(&mut id_bytes)
             .map_err(|e| format!("id: {e}"))?;
         let id = String::from_utf8(id_bytes).map_err(|e| format!("id utf8: {e}"))?;
+        if id != "ScriptFileList" && (id.is_empty() || !id.bytes().all(|b| b.is_ascii_digit())) {
+            return Err("invalid script ID".into());
+        }
 
         // size
         cur.read_exact(&mut buf).map_err(|e| format!("size: {e}"))?;
@@ -96,31 +102,36 @@ fn parse_bundle(data: &[u8], out: &mut HashMap<String, String>) -> Result<(), St
     }
 
     // Decrypt + decompress each entry
+    let header_end = cur.position() as usize;
+    let mut total = 0usize;
     for info in &infos {
         let start = info.index as usize;
-        let end = start + info.size as usize;
-        if end > data.len() {
-            log::warn!("bundle: {} — size {end} exceeds file", info.id);
-            continue;
+        let end = start
+            .checked_add(info.size as usize)
+            .ok_or("bundle entry overflow")?;
+        if start < header_end || end > data.len() {
+            return Err(format!("{}: invalid entry bounds", info.id));
         }
 
         let encrypted = &data[start..end];
 
-        let cipher = RijndaelCbc::<Pkcs7Padding>::new(KEY, BLOCK_SIZE)
-            .map_err(|e| format!("rijndael init: {e:?}"))?;
-
-        let decrypted = cipher
-            .decrypt(IV, encrypted.to_vec())
-            .map_err(|e| format!("{}: decrypt: {e:?}", info.id))?;
-
-        let mut decompressed = Vec::new();
-        flate2::read::ZlibDecoder::new(&decrypted[..])
-            .read_to_end(&mut decompressed)
-            .map_err(|e| format!("{}: zlib: {e}", info.id))?;
+        let decrypted = crate::crypto::rijndael::decrypt(encrypted, KEY, IV)?;
+        let decompressed = crate::crypto::script::read_bounded(
+            flate2::read::ZlibDecoder::new(&decrypted[..]),
+            8 * 1024 * 1024,
+        )?;
 
         let plain = decode_utf16le(&decompressed).map_err(|e| format!("{}: {e}", info.id))?;
 
-        out.insert(info.id.clone(), plain);
+        total = total
+            .checked_add(plain.len())
+            .ok_or("bundle text size overflow")?;
+        if total > 256 * 1024 * 1024 {
+            return Err("bundle text exceeds size limit".into());
+        }
+        if out.insert(info.id.clone(), plain).is_some() {
+            return Err("duplicate story ID".into());
+        }
     }
 
     Ok(())
@@ -132,7 +143,9 @@ fn decode_utf16le(data: &[u8]) -> Result<String, String> {
         return Err("odd byte length for UTF-16".into());
     }
     let u16s: Vec<u16> = data
-        .chunks_exact(2)
+        .as_chunks::<2>()
+        .0
+        .iter()
         .map(|c| u16::from_le_bytes([c[0], c[1]]))
         .collect();
     String::from_utf16(&u16s).map_err(|e| format!("utf-16: {e:?}"))

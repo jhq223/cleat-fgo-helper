@@ -22,13 +22,6 @@ pub async fn fetch(
     force: bool,
 ) -> Result<PathBuf> {
     let out_path = data_dir.join("AssetStorage_dec.txt");
-    if out_path.exists() && !force {
-        log::info!(
-            "[{}] AssetStorage_dec.txt cached, skipping download",
-            server
-        );
-        return Ok(out_path);
-    }
 
     let config = get_config(server);
     let is_cn = config.server_type == "cn";
@@ -47,14 +40,19 @@ pub async fn fetch(
         )
     };
 
+    if !force && crate::storage::read_cache(&out_path, &url, 64 * 1024 * 1024).is_some() {
+        log::info!("[{server}] AssetStorage cache matches the current version");
+        return Ok(out_path);
+    }
     log::info!("[{}] Downloading AssetStorage...", server);
     log::info!("  URL: {url}");
 
-    let enc_text = client.get(&url).send().await?.text().await?;
+    let enc_bytes = crate::storage::get(client, &url, 64 * 1024 * 1024).await?;
+    let enc_text =
+        String::from_utf8(enc_bytes).map_err(|e| crate::error::Error::Parse(e.to_string()))?;
 
     // Save encrypted text for debugging
     let enc_path = data_dir.join("AssetStorage_enc.txt");
-    std::fs::write(&enc_path, &enc_text)?;
 
     log::info!(
         "[{}] Decrypting AssetStorage... ({} bytes)",
@@ -65,7 +63,13 @@ pub async fn fetch(
     let dec_text =
         crypto::decrypt(&enc_text, stage_data, stage_top).map_err(crate::error::Error::Crypto)?;
 
-    std::fs::write(&out_path, &dec_text)?;
+    let entries = super::parser::parse_text(&dec_text, config.server_type)
+        .map_err(crate::error::Error::Parse)?;
+    if entries.is_empty() {
+        return Err(crate::error::Error::Parse("empty AssetStorage".into()));
+    }
+    crate::storage::atomic_write(&enc_path, enc_text.as_bytes())?;
+    crate::storage::write_cache(&out_path, &url, dec_text.as_bytes())?;
     log::info!(
         "[{}] Saved: {} ({} bytes)",
         server,

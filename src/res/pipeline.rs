@@ -67,24 +67,6 @@ pub async fn cmd_download(server: &str, force: bool, no_scripts: bool) -> Result
     let dir = data_dir(server);
     std::fs::create_dir_all(&dir)?;
 
-    let keys_path = std::path::PathBuf::from("resources/keys.json");
-    if !keys_path.exists() {
-        log::error!(
-            "FATAL: resources/keys.json not found. This file is required for script decryption."
-        );
-        return Err(crate::error::Error::NotFound(
-            "resources/keys.json is required but not found".into(),
-        ));
-    }
-    let keys_file = std::fs::File::open(&keys_path)?;
-    let script_keys: Vec<script::KeyEntry> =
-        serde_json::from_reader(keys_file)?;
-    log::info!(
-        "[{}] Loaded {} keys from resources/keys.json",
-        server,
-        script_keys.len()
-    );
-
     let client = build_client()?;
 
     let ver_info = version::fetch(&client, server).await?;
@@ -108,35 +90,56 @@ pub async fn cmd_download(server: &str, force: bool, no_scripts: bool) -> Result
     let script_assets = parser::find_script_assets(&entries);
     log::info!("[{}] Found {} script assets", server, script_assets.len());
 
-    let extra_keys: HashMap<String, String> = if config.server_type == "jp" {
-        load_or_fetch_extra_keys(&client, server, &ver_info, &dir, force).await?
-    } else {
-        HashMap::new()
-    };
+    let extra_keys: HashMap<String, String> = ver_info
+        .resource_keys
+        .iter()
+        .map(|key| (key.id.clone(), key.decrypt_key.clone()))
+        .collect();
+    crate::storage::atomic_write(
+        &dir.join("assetbundleKey.json"),
+        &serde_json::to_vec(&ver_info.resource_keys)?,
+    )?;
+    let snapshot_id = crate::storage::digest(&serde_json::to_vec(&ver_info)?);
+    if !force && let Ok(snapshot) = super::snapshot::load(&dir, &snapshot_id, no_scripts) {
+        log::info!(
+            "[{server}] verified complete snapshot: {}",
+            snapshot.display()
+        );
+        super::snapshot::activate(&dir, &snapshot_id)?;
+        return Ok(());
+    }
+    let staging = tempfile::tempdir_in(&dir)?;
+    let output = staging.path();
 
     match download_localization(
-        &client,
-        server,
-        &ver_info,
+        &ResourceContext {
+            client: &client,
+            server,
+            ver_info: &ver_info,
+            extra_keys: &extra_keys,
+            base_data: &base_data,
+            base_top: &base_top,
+            data_dir: &dir,
+            force,
+        },
         &entries,
-        &extra_keys,
-        &base_data,
-        &base_top,
-        &dir,
-        force,
+        output,
     )
     .await
     {
-        Ok(paths) if paths.is_empty() => log::warn!("[{}] No Localization asset found", server),
+        Ok(paths) if paths.is_empty() => {
+            return Err(crate::error::Error::NotFound("Localization asset".into()));
+        }
         Ok(paths) => {
             let names: Vec<_> = paths.iter().map(|p| p.display().to_string()).collect();
             log::info!("[{}] Localization saved: {}", server, names.join(", "));
         }
-        Err(e) => log::error!("[{}] Localization download failed: {e}", server),
+        Err(e) => return Err(e),
     }
 
     if no_scripts {
         log::info!("[{}] Skipping script download (--no-scripts)", server);
+        super::snapshot::publish(&dir, &snapshot_id, staging, &ver_info, false)?;
         return Ok(());
     }
 
@@ -162,14 +165,13 @@ pub async fn cmd_download(server: &str, force: bool, no_scripts: bool) -> Result
 
         let asset = script_assets.iter().find(|a| a.file_name == file_name);
 
-        let real_key = asset
-            .and_then(|a| a.extra_key.as_deref())
-            .and_then(|ek| extra_keys.get(ek).map(String::as_str));
+        let real_key = resource_key(asset.and_then(|a| a.extra_key.as_deref()), &extra_keys)?;
 
         let ab_data = asset_bin::decrypt(enc_data, &base_data, &base_top, real_key)?;
 
         let ab_path = ab_dir.join(format!("{}.unity3d", file_name));
-        std::fs::write(&ab_path, &ab_data)?;
+        validate_bundle(&ab_data)?;
+        crate::storage::atomic_write(&ab_path, &ab_data)?;
         decrypted_paths.push(ab_path);
     }
 
@@ -185,76 +187,127 @@ pub async fn cmd_download(server: &str, force: bool, no_scripts: bool) -> Result
         return Ok(());
     }
 
-    let scripts_dir = dir.join("scripts");
+    let scripts_dir = output.join("scripts");
     std::fs::create_dir_all(&scripts_dir)?;
-
-    let extracted = unity::extract::extract_batch(&ab_dir)?;
-
-    use rayon::prelude::*;
-
-    let all_texts: Vec<_> = extracted
-        .iter()
-        .flat_map(|b| {
-            b.texts
-                .iter()
-                .map(move |t| (t.name.clone(), t.script_text.clone()))
-        })
-        .collect();
-
-    log::info!("[{}] Decrypting {} scripts...", server, all_texts.len());
-
-    let use_bzip2 = config.use_bzip2;
-    let results: Vec<Result<PathBuf>> = all_texts
-        .par_iter()
-        .filter(|(name, _)| {
-            name.is_empty() || name.chars().all(|c| c.is_ascii_digit()) || name == "ScriptFileList"
-        })
-        .map(|(name, text)| {
-            let path = scripts_dir.join(format!("{name}.txt"));
-            match script::decrypt(text, &stage_data, &stage_top, use_bzip2) {
-                Ok(plain) => std::fs::write(&path, &plain)?,
-                Err(_) => {
-                    if let Some(plain) = script::decrypt_with_keys(text, &script_keys) {
-                        std::fs::write(&path, &plain)?;
-                    } else {
-                        log::error!("[{}] Decrypt failed for '{}', saving raw base64", server, name);
-                        std::fs::write(&path, text)?;
-                    }
-                }
+    let mut key_ids = std::collections::BTreeMap::new();
+    let mut all_texts = std::collections::BTreeMap::new();
+    for path in &decrypted_paths {
+        for (name, key) in unity::extract::script_keys(path)? {
+            if key_ids
+                .insert(name.clone(), key.clone())
+                .is_some_and(|previous| previous != key)
+            {
+                return Err(crate::error::Error::Parse(format!(
+                    "{name}: conflicting key IDs"
+                )));
             }
-            Ok(path)
-        })
-        .collect();
-
-    let mut count = 0;
-    for r in results {
-        match r {
-            Ok(_) => count += 1,
-            Err(e) => log::error!("Decrypt failed: {e}"),
+        }
+        for text in unity::extract::extract_bundle(path)?.texts {
+            if let Some(previous) = all_texts.insert(text.name.clone(), text.script_text.clone())
+                && previous != text.script_text
+            {
+                return Err(crate::error::Error::Parse(format!(
+                    "{}: conflicting scripts",
+                    text.name
+                )));
+            }
         }
     }
-
     log::info!(
-        "[{}] {} script .txt files → {}",
-        server,
-        count,
-        scripts_dir.display()
+        "[{server}] Decrypting {} scripts with {} explicit key references",
+        all_texts.len(),
+        key_ids.len()
     );
-
+    use rayon::prelude::*;
+    let results: Vec<Result<()>> = all_texts
+        .par_iter()
+        .map(|(name, text)| {
+            // GetKey returns null for stale key IDs; the client then uses the
+            // legacy codec. This is explicit dispatch, never a trial of other keys.
+            let plain = if let Some(key) = key_ids.get(name).and_then(|id| extra_keys.get(id)) {
+                script::decrypt_with_key(text, key)
+            } else {
+                script::decrypt(text, &stage_data, &stage_top, config.use_bzip2)
+            }
+            .map_err(|e| crate::error::Error::Crypto(format!("{name}: {e}")))?;
+            script::validate(name, &plain).map_err(crate::error::Error::Parse)?;
+            std::fs::write(scripts_dir.join(format!("{name}.txt")), plain)?;
+            Ok(())
+        })
+        .collect();
+    let failures: Vec<_> = results.into_iter().filter_map(Result::err).collect();
+    if !failures.is_empty() {
+        for error in failures.iter().take(10) {
+            log::error!("{error}");
+        }
+        return Err(crate::error::Error::Crypto(format!(
+            "{}/{} script decryptions failed; previous snapshot preserved",
+            failures.len(),
+            all_texts.len()
+        )));
+    }
+    if all_texts.is_empty() {
+        return Err(crate::error::Error::Parse("no scripts extracted".into()));
+    }
+    super::snapshot::publish(&dir, &snapshot_id, staging, &ver_info, true)?;
+    log::info!(
+        "[{server}] Verified {} scripts; snapshot {snapshot_id}",
+        all_texts.len()
+    );
     Ok(())
 }
 
-async fn download_localization(
-    client: &reqwest::Client,
-    server: &str,
-    ver_info: &version::VersionInfo,
-    entries: &[AssetEntry],
-    extra_keys: &HashMap<String, String>,
-    base_data: &[u8; 32],
-    base_top: &[u8; 32],
-    data_dir: &Path,
+fn resource_key<'a>(
+    id: Option<&str>,
+    keys: &'a HashMap<String, String>,
+) -> Result<Option<&'a str>> {
+    id.map(|id| {
+        keys.get(id).map(String::as_str).ok_or_else(|| {
+            crate::error::Error::Crypto(format!("resource key ID {id} absent in this version"))
+        })
+    })
+    .transpose()
+}
+
+fn validate_bundle(bytes: &[u8]) -> Result<()> {
+    if bytes.starts_with(b"UnityFS\0")
+        || bytes.starts_with(b"UnityRaw\0")
+        || bytes.starts_with(b"UnityWeb\0")
+    {
+        Ok(())
+    } else {
+        Err(crate::error::Error::Parse(
+            "decrypted resource is not a Unity bundle".into(),
+        ))
+    }
+}
+
+struct ResourceContext<'a> {
+    client: &'a reqwest::Client,
+    server: &'a str,
+    ver_info: &'a version::VersionInfo,
+    extra_keys: &'a HashMap<String, String>,
+    base_data: &'a [u8; 32],
+    base_top: &'a [u8; 32],
+    data_dir: &'a Path,
     force: bool,
+}
+
+async fn download_localization(
+    context: &ResourceContext<'_>,
+    entries: &[AssetEntry],
+    output: &Path,
 ) -> Result<Vec<PathBuf>> {
+    let ResourceContext {
+        client,
+        server,
+        ver_info,
+        extra_keys,
+        base_data,
+        base_top,
+        data_dir,
+        force,
+    } = *context;
     let loc_asset = match parser::find_localization_asset(entries) {
         Some(a) => a,
         None => return Ok(Vec::new()),
@@ -278,15 +331,13 @@ async fn download_localization(
     )
     .await?;
 
-    let real_key = loc_asset
-        .extra_key
-        .as_deref()
-        .and_then(|ek| extra_keys.get(ek).map(String::as_str));
+    let real_key = resource_key(loc_asset.extra_key.as_deref(), extra_keys)?;
 
     let ab_data = crate::crypto::asset_bin::decrypt(&enc_data, base_data, base_top, real_key)
         .map_err(|e| crate::error::Error::Crypto(format!("Localization decrypt: {e}")))?;
 
-    let tmp_ab_path = data_dir.join("_loc_temp.unity3d");
+    validate_bundle(&ab_data)?;
+    let tmp_ab_path = output.join("_loc_temp.unity3d");
     std::fs::write(&tmp_ab_path, &ab_data)?;
 
     let texts = crate::unity::extract::extract_bundle_all_texts(&tmp_ab_path)?;
@@ -307,7 +358,11 @@ async fn download_localization(
 
     let mut saved = Vec::new();
     for t in &texts {
-        let out_path = data_dir.join(format!("{}.txt", t.name));
+        if !t.name.starts_with("Localization") || !t.name.bytes().all(|b| b.is_ascii_alphanumeric())
+        {
+            continue;
+        }
+        let out_path = output.join(format!("{}.txt", t.name));
         std::fs::write(&out_path, &t.script_text)?;
         log::info!(
             "[{}]   → {} ({} bytes)",
@@ -327,72 +382,4 @@ fn build_client() -> Result<reqwest::Client> {
         .user_agent("Dalvik/2.1.0 (Linux; U; Android 13; Pixel 6 Build/TQ2A.230505.002)")
         .build()
         .map_err(crate::error::Error::Http)
-}
-
-async fn load_or_fetch_extra_keys(
-    client: &reqwest::Client,
-    server: &str,
-    ver_info: &version::VersionInfo,
-    data_dir: &Path,
-    force: bool,
-) -> Result<HashMap<String, String>> {
-    let key_path = data_dir.join("assetbundleKey.json");
-
-    if key_path.exists() && !force {
-        match parser::load_extra_keys(&key_path) {
-            Ok(keys) => {
-                log::info!("[{}] Loaded {} extra keys", server, keys.len());
-                return Ok(keys);
-            }
-            Err(e) => log::warn!("Failed to load extra keys: {e}"),
-        }
-    }
-
-    log::info!("[{}] Fetching assetbundleKey from gamedata...", server);
-
-    let base_url = crate::config::JP_CONFIG
-        .version_url
-        .split('?')
-        .next()
-        .unwrap();
-    let url = format!(
-        "{base_url}?appVer={}&dataVer={}&dateVer={}",
-        ver_info.app_ver, ver_info.data_ver, ver_info.date_ver
-    );
-
-    let resp = client.get(&url).send().await?;
-    let data: serde_json::Value = resp.json().await?;
-
-    let success = data["response"][0]["success"]
-        .as_object()
-        .ok_or_else(|| crate::error::Error::Version("No success in response".into()))?;
-
-    let ab_key_b64 = success
-        .get("assetbundleKey")
-        .and_then(|v| v.as_str())
-        .unwrap_or("");
-
-    if ab_key_b64.is_empty() {
-        log::info!("[{}] No assetbundleKey in response", server);
-        return Ok(HashMap::new());
-    }
-
-    let key_list = crate::crypto::gamedata::unpack_key_list(ab_key_b64)
-        .map_err(crate::error::Error::Crypto)?;
-
-    let json = serde_json::to_string_pretty(&key_list).map_err(crate::error::Error::Json)?;
-    std::fs::write(&key_path, &json)?;
-
-    let keys: HashMap<String, String> = key_list
-        .into_iter()
-        .map(|k| (k.id, k.decrypt_key))
-        .collect();
-
-    log::info!(
-        "[{}] Saved {} extra keys to {:?}",
-        server,
-        keys.len(),
-        key_path
-    );
-    Ok(keys)
 }

@@ -72,6 +72,12 @@ static DEHARMONIZE_MAP: &[(&str, &str)] = &[
     ("暗匿者", "暗杀者"),
 ];
 
+pub fn deharmonize_text(text: &str) -> String {
+    DEHARMONIZE_MAP
+        .iter()
+        .fold(text.to_owned(), |s, (from, to)| s.replace(from, to))
+}
+
 /// Apply anti-harmonization replacements to CN script txt files.
 pub fn cmd_deharmonize(input_dir: &str, output_dir: &str) -> anyhow::Result<()> {
     let input = std::path::Path::new(input_dir);

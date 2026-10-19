@@ -44,18 +44,21 @@ pub fn derive_4byte_interleave(src: &[u8; 64]) -> ([u8; 32], [u8; 32]) {
     (data, top)
 }
 
-/// Split extra_key (decryptKey UTF-8 bytes) into home (IV) and info (key).
-/// home[0] = first byte, info[1..] = remaining bytes (up to 31).
+/// Split decryptKey UTF-8 bytes into the key and IV used by the resource client.
+/// Indices wrap at 32 bytes; later blocks overwrite the corresponding byte.
 pub fn split_extra_key(key_str: &str) -> ([u8; 32], [u8; 32]) {
     let key_bytes = key_str.as_bytes();
     let mut home = [0u8; 32];
     let mut info = [0u8; 32];
 
-    if !key_bytes.is_empty() {
-        home[0] = key_bytes[0];
+    for (index, &byte) in key_bytes.iter().enumerate() {
+        let slot = index % 32;
+        if slot == 0 {
+            home[0] = byte;
+        } else {
+            info[slot] = byte;
+        }
     }
-    let copy_len = (key_bytes.len() - 1).min(31);
-    info[1..1 + copy_len].copy_from_slice(&key_bytes[1..1 + copy_len]);
 
     (home, info)
 }
@@ -63,6 +66,16 @@ pub fn split_extra_key(key_str: &str) -> ([u8; 32], [u8; 32]) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn extra_keys_handle_empty_and_wrapping_utf8_bytes() {
+        assert_eq!(split_extra_key(""), ([0; 32], [0; 32]));
+        let (key, iv) = split_extra_key(&format!("{}XY", "a".repeat(32)));
+        assert_eq!(key[0], b'X');
+        assert_eq!(iv[0], 0);
+        assert_eq!(iv[1], b'Y');
+        assert_eq!(iv[2], b'a');
+    }
 
     #[test]
     fn test_byte_interleave() {
@@ -83,8 +96,8 @@ mod tests {
     #[test]
     fn test_4byte_interleave() {
         let mut src = [0u8; 64];
-        for i in 0..64 {
-            src[i] = i as u8;
+        for (i, byte) in src.iter_mut().enumerate() {
+            *byte = i as u8;
         }
         let (data, top) = derive_4byte_interleave(&src);
         // block 0 (bytes 0-3) → data[0..4]

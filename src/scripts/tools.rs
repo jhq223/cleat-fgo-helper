@@ -29,4 +29,3 @@ pub fn cmd_compare(jp_dir: &str, cn_dir: &str, output_dir: &str) -> anyhow::Resu
     log::info!("Copied {} JP-only scripts to {}", copied, output_dir);
     Ok(())
 }
-

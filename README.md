@@ -1,166 +1,84 @@
 # cleat-fgo-helper
 
-A Rust CLI toolchain for Fate/Grand Order (FGO) resource management, APK modification, and translation workflow automation.
+FGO 日服 APK 构建和汉化资源工具，使用 Rust 实现。下载、解码、版本快照、剧情对齐、本地化合并及资源清单由工具自动处理。
 
-## Features
+## 构建资源包
 
-### Resource Pipeline
-- Download and decrypt FGO game resources from JP/CN servers
-- Automatic version detection and AssetStorage parsing
-- Asset bundle extraction (Unity assets)
+安装稳定版 Rust 后编译：
 
-### APK Modification
-- XAPK extraction and APK decompilation
-- Inject native libraries and Smali patches
-- Rebuild and sign APK
-
-### Script System
-- Convert between `.txt` script files and `.script` binary bundles
-- Parse FGO story scripts (dialogue, choices, character names)
-
-### Translation Workflow
-- Export translatable text (dialogue, choices) to JSON
-- Import translated JSON back into scripts
-- Merge translation JSON with original exports
-- Compare JP/CN scripts to find exclusive content
-- Deduplicate translated scripts against official CN
-- Deharmonize CN scripts (anti-censorship text replacements)
-
-### Utilities
-- Download Chaldea translation mapping data
-- Generate character name mappings
-- Script directory comparison and diff tools
-
-## Installation
-
-### Prerequisites
-- [Rust](https://www.rust-lang.org/) (edition 2024)
-- Java Runtime (for APK operations: apktool, apksigner)
-
-### Build
-
-```bash
-git clone https://github.com/jhq223/cleat-fgo-helper.git
-cd cleat-fgo-helper
-cargo build --release
+```sh
+cargo build --release --locked
 ```
 
-The binary will be at `target/release/fgo-helper`.
+在工作目录执行：
 
-## Usage
-
-```
-fgo-helper <COMMAND>
-
-Commands:
-  apk       APK modification pipeline
-  res       Download & decrypt FGO game resources
-  scripts   Convert between .txt and .script bundles
-  script    Export/import translatable text
-  tools     Compare, dedup, and deharmonize scripts
-  mappings  Download Chaldea translation mappings
-  help      Print this message or the help of the given subcommand(s)
+```sh
+fgo-helper resources build
 ```
 
-### Resource Download
+工具自动获取日服和国服当前资源，按当前版本的 ScriptEncryptSetting 选择解码方式，校验下载缓存，生成完整快照，再对齐剧情及本地化文本。不需要从模块导出 keys.json，也不用手动填写快照目录或先合并 Localization 文件。
 
-```bash
-# Download JP resources
-fgo-helper res download jp
+输出位于 `dist/resources/<内容版本>/`：
 
-# Download CN resources (force re-download)
-fgo-helper res download cn --force
+- `stories.script`：通过对齐检查的中文剧情。
+- `LocalizationJpn.txt`：保留日服键名与格式参数的本地化文本。
+- `manifest.json`：版本、下载地址、大小与 SHA-256。
+- `report.json`：缺少国服对应文本及需要人工核对的剧情列表。
 
-# Check server version
-fgo-helper res info jp
+`dist/resources/latest.txt` 指向最新构建。`--offline` 复用已校验快照，`--font <文件>` 可附加含 FGO-Main-Font-Mod 的 Unity Font AssetBundle。`--base-url` 可指定其他 HTTPS 资源目录，路径末尾必须有 `/`，允许使用 `{version}` 占位符。
+
+对齐保留日服控制命令，只替换能确认对应关系的对白、选项和姓名。结构不匹配时记入报告，不覆盖游戏原文。下载失败、密钥索引缺失、损坏内容或不完整快照不会成为活动版本。工具支持真实资源中存在的 Unicode 空白、缺失/重复逗号及多行字符串，但仍校验解码和占位符。
+
+## 发布到同仓库 Release
+
+模块默认从 `jhq223/cleat-fgo` 的 `resources` Release 获取 manifest.json。首次创建：
+
+```sh
+gh release create resources --repo jhq223/cleat-fgo --title "Translation resources" --notes "中文剧情与本地化资源" --latest=false
 ```
 
-### Script Conversion
+在当前资源输出目录中发布，先传资源，再传清单：
 
-```bash
-# Convert .txt files to binary bundle
-fgo-helper scripts txt-to-bundle -i ./scripts -o bundle.script
-
-# Extract binary bundle to .txt files
-fgo-helper scripts bundle-to-txt -i bundle.script -o ./scripts
+```sh
+gh release upload resources stories.script LocalizationJpn.txt --repo jhq223/cleat-fgo --clobber
+gh release upload resources manifest.json --repo jhq223/cleat-fgo --clobber
 ```
 
-### Translation Export/Import
+包含字体时在第一条命令加上 `Font`。report.json 供维护者本地审核，不是模块必需文件。不要将资源 Release 标记为 latest，以免 APK 构建任务把它当成模块库版本。更新中读到不匹配的旧清单或缓存文件时，模块会校验失败并保留旧包，稍后重试。
 
-```bash
-# Export dialogue and choices to JSON
-fgo-helper script export -i data/jp/scripts -o data/export
+剧情、游戏资产、账号导出和签名文件不应提交到源码仓库。资源发布者负责确认所发布素材的使用权限。
 
-# Import translated JSON back
-fgo-helper script import --json-dir data/translated -o data/output
+## 翻译维护工具
 
-# Merge translations into exported JSON
-fgo-helper script merge -t data/translated -o data/merged
+```sh
+fgo-helper script export
+fgo-helper script import
+fgo-helper tools compare
+fgo-helper tools deharmonize
+fgo-helper tools localize
 ```
 
-### Script Tools
+省略输入路径时自动读取当前已校验的日服/国服快照。仍可显式指定 `--input`、`--original`、`--jp` 或 `--cn`，用于人工翻译和调试。`script merge` 合并人工翻译 JSON；`scripts txt-to-bundle` / `bundle-to-txt` 用于单独打包和解包。
 
-```bash
-# Find JP-exclusive scripts not in CN
-fgo-helper tools compare -j data/jp/scripts -c data/cn/scripts -o data/jp_only
+`res download jp`、`res download cn`、`res info jp`、`res list jp` 用于单个服务器数据操作。`mappings download` 获取 Chaldea 映射。所有命令均可用 `--help` 查看参数。已校验数据保存在 data/，工作目录决定缓存位置。
 
-# Remove CN-duplicate scripts from translated directory
-fgo-helper tools dedup -c data/cn/scripts -t data/translated
+## APK 构建
 
-# Deharmonize CN scripts
-fgo-helper tools deharmonize -i data/cn/scripts -o data/cn_deharmonized
-```
+需要 Java、apktool 和 apksigner：
 
-### APK Operations
-
-```bash
-# Setup: extract XAPK + decompile + inject patches
+```sh
 fgo-helper apk setup --xapk game.xapk
-
-# Build: rebuild and sign APK
-fgo-helper apk build
-
-# Clean build artifacts
-fgo-helper apk clean
+fgo-helper apk build --ks /path/to/key.keystore --ks-pass PASSWORD --ks-alias ALIAS --lib-dir lib/
 ```
 
-### Mappings
+lib/ 直接包含待注入的 ARM64 `.so` 文件。自动构建与更新清单见 [cleat-fgo-build](https://github.com/jhq223/cleat-fgo-build)。签名材料保存在本地或 CI Secrets；不要提交仓库。
 
-```bash
-# Download Chaldea translation mappings
-fgo-helper mappings download -o data/mappings
+## 开发检查
 
-# Generate character name mappings
-fgo-helper tools scan-names -m data/mappings -o names.json
+```sh
+cargo fmt --check
+cargo test --locked
+cargo clippy --all-targets --locked -- -D warnings
 ```
 
-## Project Structure
-
-```
-src/
-├── apk/          # APK modification (setup, build, clean)
-├── bundle/       # Script bundle read/write
-├── config/       # Configuration
-├── crypto/       # AES/Rijndael decryption, hashing, key management
-├── error/        # Error types
-├── mappings/     # Chaldea translation data download
-├── res/          # Resource pipeline (download, parse, version)
-├── scripts/      # Script parsing, export/import, merge, tools
-├── unity/        # Unity asset extraction
-└── util/         # Utility functions
-```
-
-## Dependencies
-
-Key dependencies:
-- `clap` — CLI argument parsing
-- `tokio` / `reqwest` — Async HTTP for resource downloads
-- `simple-rijndael` — AES decryption for FGO assets
-- `flate2` / `bzip2` — Decompression
-- `unity-asset` — Unity asset parsing
-- `peg` — PEG parser generator for script syntax
-- `rayon` — Parallel processing
-
-## License
-
-MIT
+单元测试覆盖解码、损坏缓存、填充校验、脚本对齐和本地化格式；真实资源检查还需要运行 resources build。Unity 资产测试依赖本地下载文件，默认忽略。

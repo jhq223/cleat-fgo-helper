@@ -1,6 +1,6 @@
 [package]
 name = "cleat-fgo-helper"
-version = "0.1.2"
+version = "0.2.0"
 edition = "2024"
 
 [[bin]]
@@ -37,4 +37,9 @@ zip = "8"
 walkdir = "2"
 urlencoding = "2"
 peg = "0.8"
-indexmap = "2"
+indexmap = { version = "2", features = ["serde"] }
+serde_json_lenient = "0.2"
+tempfile = "3"
+sha2 = "0.11"
+
+[workspace]

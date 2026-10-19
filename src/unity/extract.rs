@@ -55,8 +55,8 @@ pub fn extract_bundle_all_texts(bundle_path: &Path) -> Result<Vec<TextAssetEntry
                         name,
                         script_text: script,
                     });
+                    continue;
                 }
-                continue;
             }
 
             // Fallback: raw-byte parsing for stripped IL2CPP bundles
@@ -74,60 +74,10 @@ pub fn extract_bundle_all_texts(bundle_path: &Path) -> Result<Vec<TextAssetEntry
     Ok(texts)
 }
 
-/// Extract TextAssets from all `.unity3d` files in a directory.
-pub fn extract_batch(ab_dir: &Path) -> Result<Vec<BundleTexts>> {
-    let entries: Vec<_> = std::fs::read_dir(ab_dir)
-        .map_err(Error::Io)?
-        .filter_map(|e| e.ok())
-        .filter(|e| e.path().extension().is_some_and(|ext| ext == "unity3d"))
-        .collect();
-
-    let total = entries.len();
-    if total == 0 {
-        return Ok(Vec::new());
-    }
-
-    log::info!(
-        "Extracting TextAssets from {} bundles via unity-asset...",
-        total
-    );
-
-    let mut results = Vec::new();
-    let mut error_count = 0usize;
-
-    for entry in &entries {
-        match extract_bundle(&entry.path()) {
-            Ok(bt) => {
-                if !bt.texts.is_empty() {
-                    results.push(bt);
-                }
-            }
-            Err(e) => {
-                log::warn!(
-                    "Failed to extract {}: {e}",
-                    entry.file_name().to_string_lossy()
-                );
-                error_count += 1;
-            }
-        }
-    }
-
-    let total_texts: usize = results.iter().map(|b| b.texts.len()).sum();
-    log::info!(
-        "Extracted {} TextAssets from {}/{} bundles ({} errors)",
-        total_texts,
-        results.len(),
-        total,
-        error_count
-    );
-
-    Ok(results)
-}
-
 // ── single-bundle extraction ─────────────────────────────────────────
 
 /// Extract TextAssets from a single `.unity3d` bundle file.
-fn extract_bundle(path: &Path) -> Result<BundleTexts> {
+pub fn extract_bundle(path: &Path) -> Result<BundleTexts> {
     let data = std::fs::read(path).map_err(Error::Io)?;
     let bundle = load_bundle_from_memory(data)
         .map_err(|e| Error::Parse(format!("Failed to load bundle {}: {e}", path.display())))?;
@@ -167,8 +117,8 @@ fn extract_bundle(path: &Path) -> Result<BundleTexts> {
                         name,
                         script_text: script,
                     });
+                    continue;
                 }
-                continue;
             }
 
             // 2) Fallback: raw-byte parsing for stripped IL2CPP bundles.
@@ -188,6 +138,47 @@ fn extract_bundle(path: &Path) -> Result<BundleTexts> {
         bundle: bundle_name,
         texts,
     })
+}
+
+/// Read the explicit script-name/key-ID relation from ScriptEncryptSettings.
+/// No key guessing is needed: the same table is consumed by the game.
+pub fn script_keys(path: &Path) -> Result<std::collections::BTreeMap<String, String>> {
+    let bundle = load_bundle_from_memory(std::fs::read(path)?)
+        .map_err(|e| Error::Parse(format!("{}: {e}", path.display())))?;
+    let mut keys = std::collections::BTreeMap::new();
+    for asset in &bundle.assets {
+        for handle in asset.object_handles() {
+            if handle.class_id() != unity_asset::class_ids::MONO_BEHAVIOUR {
+                continue;
+            }
+            let Ok(object) = handle.read() else {
+                continue;
+            };
+            let Some(settings) = object.get("settings").and_then(|v| v.as_array()) else {
+                continue;
+            };
+            for row in settings {
+                let Some(row) = row.as_object() else {
+                    continue;
+                };
+                let Some(name) = row.get("scriptName").and_then(|v| v.as_str()) else {
+                    continue;
+                };
+                let key = row
+                    .get("keyType")
+                    .and_then(|v| v.as_str())
+                    .filter(|s| !s.is_empty())
+                    .ok_or_else(|| Error::Parse(format!("{name}: missing script key ID")))?;
+                let name = name.strip_suffix(".txt").unwrap_or(name);
+                if let Some(previous) = keys.insert(name.to_owned(), key.to_owned())
+                    && previous != key
+                {
+                    return Err(Error::Parse(format!("{name}: conflicting script key IDs")));
+                }
+            }
+        }
+    }
+    Ok(keys)
 }
 
 // ── helpers ───────────────────────────────────────────────────────────
@@ -262,6 +253,7 @@ mod tests {
     /// Parse the real FGO script bundle and verify we get the expected
     /// `ScriptFileList` TextAsset with encrypted content.
     #[test]
+    #[ignore = "requires locally downloaded game assets; run resource download first"]
     fn test_extract_scriptfilelist_bundle() {
         let path =
             Path::new("data/jp/decrypted_ab/2b3c7a4706632dd61f9e7e840fedd8e368a81633.bin.unity3d");

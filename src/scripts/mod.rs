@@ -10,6 +10,7 @@
 //! - `tools`   : directory comparison
 //! - `tests`   : parser unit tests
 
+pub mod align;
 pub mod export;
 pub mod import;
 pub mod localize;

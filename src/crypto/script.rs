@@ -1,125 +1,130 @@
-//! Script text encryption/decryption (MouseGame3 / CatGame3).
-//!
-//! Decrypt chain:
-//!   Base64Decode → Rijndael-256-CBC Decrypt → Decompress(GZip/BZip2) → ByteNOT → UTF-8
-//!
-//! Encrypt chain:
-//!   UTF-8 → ByteNOT → Compress(GZip/BZip2) → Rijndael-256-CBC Encrypt → Base64Encode
-
-use crate::crypto::rijndael;
-use serde::Deserialize;
+//! Script codecs. The caller resolves each script's key ID from its bundle.
+use crate::crypto::{keys, rijndael};
+use base64::Engine;
 use std::io::Read;
 
-#[derive(Debug, Deserialize, Clone)]
-#[allow(dead_code)]
-pub struct KeyEntry {
-    pub id: String,
-    #[serde(alias = "decryptKey")]
-    pub decrypt_key: String,
-}
+pub const MAX_SCRIPT: usize = 8 * 1024 * 1024;
 
-pub fn derive_key_iv(seed_str: &str) -> ([u8; 32], [u8; 32]) {
-    let seed_bytes = seed_str.as_bytes();
-    let mut key = [0u8; 32];
-    let mut iv = [0u8; 32];
-
-    if !seed_bytes.is_empty() {
-        key[0] = seed_bytes[0];
+pub fn read_bounded(reader: impl Read, limit: usize) -> Result<Vec<u8>, String> {
+    let mut bytes = Vec::new();
+    reader
+        .take(limit as u64 + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|e| format!("decompress: {e}"))?;
+    if bytes.len() > limit {
+        return Err("decompressed resource exceeds size limit".into());
     }
-
-    let limit = std::cmp::min(32, seed_bytes.len());
-    iv[1..limit].copy_from_slice(&seed_bytes[1..limit]);
-
-    (key, iv)
+    Ok(bytes)
 }
 
-pub fn decrypt_new(base64_text: &str, key: &[u8; 32], iv: &[u8; 32]) -> Result<String, String> {
-    use base64::Engine;
-
-    let raw = base64::engine::general_purpose::STANDARD
-        .decode(base64_text.trim())
-        .map_err(|e| format!("base64 decode: {e}"))?;
-
-    let plain = rijndael::decrypt(&raw, key, iv)?;
-
-    let decompressed = if plain.starts_with(b"BZh") {
-        let mut dec = Vec::new();
-        let mut decoder = bzip2::read::BzDecoder::new(&plain[..]);
-        decoder
-            .read_to_end(&mut dec)
-            .map_err(|e| format!("bzip2 decompress: {e}"))?;
-        dec
+pub fn decompress(plain: Vec<u8>, limit: usize) -> Result<Vec<u8>, String> {
+    if plain.starts_with(b"BZh") {
+        read_bounded(bzip2::read::BzDecoder::new(&plain[..]), limit)
     } else if plain.starts_with(&[0x1f, 0x8b, 0x08]) {
-        let mut dec = Vec::new();
-        let mut decoder = flate2::read::GzDecoder::new(&plain[..]);
-        decoder
-            .read_to_end(&mut dec)
-            .map_err(|e| format!("gzip decompress: {e}"))?;
-        dec
+        read_bounded(flate2::read::GzDecoder::new(&plain[..]), limit)
+    } else if plain.len() <= limit {
+        Ok(plain)
     } else {
-        plain
-    };
-
-    String::from_utf8(decompressed)
-        .map(|s| s.trim_end_matches('\0').to_string())
-        .map_err(|e| format!("utf-8 decode: {e}"))
+        Err("resource exceeds size limit".into())
+    }
 }
 
-pub fn decrypt_with_keys(base64_text: &str, keys: &[KeyEntry]) -> Option<String> {
-    for entry in keys {
-        let (key, iv) = derive_key_iv(&entry.decrypt_key);
-        if let Ok(decrypted) = decrypt_new(base64_text, &key, &iv) {
-            if !decrypted.is_empty()
-                && (decrypted.contains('{')
-                    || decrypted.contains('"')
-                    || decrypted.lines().count() > 1
-                    || decrypted.chars().any(|c| c.is_alphabetic()))
-            {
-                return Some(decrypted);
-            }
+pub fn decode_base64(text: &str, limit: usize) -> Result<Vec<u8>, String> {
+    if text.len() > limit.saturating_mul(4) / 3 + 4 {
+        return Err("encoded resource exceeds size limit".into());
+    }
+    base64::engine::general_purpose::STANDARD
+        .decode(text.trim())
+        .map_err(|e| format!("base64: {e}"))
+}
+
+pub fn decrypt_with_key(text: &str, seed: &str) -> Result<String, String> {
+    if seed.is_empty() {
+        return Err("empty script key".into());
+    }
+    let (key, iv) = keys::split_extra_key(seed);
+    decode(text, &key, &iv, false, MAX_SCRIPT)
+}
+
+/// Legacy scripts invert bytes after decompression. Detect compression by header.
+pub fn decrypt(
+    text: &str,
+    key: &[u8; 32],
+    iv: &[u8; 32],
+    _use_bzip2: bool,
+) -> Result<String, String> {
+    decode(text, key, iv, true, MAX_SCRIPT)
+}
+
+pub fn decode(
+    text: &str,
+    key: &[u8; 32],
+    iv: &[u8; 32],
+    invert: bool,
+    limit: usize,
+) -> Result<String, String> {
+    let encrypted = decode_base64(text, limit)?;
+    let mut bytes = decompress(rijndael::decrypt(&encrypted, key, iv)?, limit)?;
+    if invert {
+        for byte in &mut bytes {
+            *byte = !*byte;
         }
     }
-    None
+    String::from_utf8(bytes)
+        .map(|s| s.trim_end_matches('\0').to_owned())
+        .map_err(|e| format!("UTF-8: {e}"))
 }
 
-/// Decrypt a base64-encoded script text.
-pub fn decrypt(
-    base64_text: &str,
-    stage_data: &[u8; 32],
-    stage_top: &[u8; 32],
-    use_bzip2: bool,
-) -> Result<String, String> {
-    use base64::Engine;
-
-    let raw = base64::engine::general_purpose::STANDARD
-        .decode(base64_text)
-        .map_err(|e| format!("base64 decode: {e}"))?;
-
-    let plain = rijndael::decrypt(&raw, stage_data, stage_top)?;
-
-    // Auto-detect or forced compression
-    let decompressed = if use_bzip2 || plain.starts_with(b"BZh") {
-        let mut dec = Vec::new();
-        let mut decoder = bzip2::read::BzDecoder::new(&plain[..]);
-        decoder
-            .read_to_end(&mut dec)
-            .map_err(|e| format!("bzip2 decompress: {e}"))?;
-        dec
-    } else if plain.starts_with(&[0x1f, 0x8b, 0x08]) {
-        let mut dec = Vec::new();
-        let mut decoder = flate2::read::GzDecoder::new(&plain[..]);
-        decoder
-            .read_to_end(&mut dec)
-            .map_err(|e| format!("gzip decompress: {e}"))?;
-        dec
+pub fn validate(name: &str, text: &str) -> Result<(), String> {
+    let body = text.trim_start_matches('\u{feff}').trim();
+    if body.is_empty() || text.contains('\0') {
+        return Err(format!("{name}: empty or binary plaintext"));
+    }
+    let valid = if name == "ScriptFileList" {
+        body.lines().all(|line| {
+            let line = line.trim();
+            line.ends_with(".txt") && !line.contains(['/', '\\', ':']) && !line.starts_with('.')
+        })
     } else {
-        plain
+        (9..=10).contains(&name.len())
+            && name.bytes().all(|b| b.is_ascii_digit())
+            && (body.starts_with(['＄', '$']) || body.starts_with("[soundStopAll]"))
     };
+    if valid {
+        Ok(())
+    } else {
+        Err(format!("{name}: plaintext is not a valid script"))
+    }
+}
 
-    // Byte NOT
-    let inverted: Vec<u8> = decompressed.iter().map(|&b| !b).collect();
-
-    String::from_utf8(inverted)
-        .map(|s| s.trim_end_matches('\0').to_string())
-        .map_err(|e| format!("utf-8 decode: {e}"))
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use simple_rijndael::{impls::RijndaelCbc, paddings::Pkcs7Padding};
+    use std::io::Write;
+    #[test]
+    fn legacy_and_new_scripts_use_explicit_codecs() {
+        let text = "＄test\n＠测试\n译文[k]\n";
+        for invert in [false, true] {
+            let key = [7; 32];
+            let iv = [3; 32];
+            let bytes: Vec<u8> = text.bytes().map(|b| if invert { !b } else { b }).collect();
+            let mut gzip =
+                flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
+            gzip.write_all(&bytes).unwrap();
+            let encrypted = RijndaelCbc::<Pkcs7Padding>::new(&key, 32)
+                .unwrap()
+                .encrypt(&iv, gzip.finish().unwrap())
+                .unwrap();
+            let base64 = base64::engine::general_purpose::STANDARD.encode(encrypted);
+            assert_eq!(
+                decode(&base64, &key, &iv, invert, MAX_SCRIPT).unwrap(),
+                text
+            );
+            assert!(decode(&base64, &key, &iv, invert, 2).is_err());
+        }
+        assert!(validate("0100010010", "abcdefghijklmnop").is_err());
+        assert!(validate("0100010010", text).is_ok());
+        assert!(validate("ScriptFileList", "../escape.txt").is_err());
+    }
 }

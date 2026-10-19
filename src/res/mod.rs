@@ -9,6 +9,7 @@ mod asset_storage;
 mod download;
 mod parser;
 mod pipeline;
+pub mod snapshot;
 mod version;
 
 pub use pipeline::{cmd_download, cmd_info, cmd_list};

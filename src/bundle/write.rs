@@ -29,9 +29,16 @@ pub fn pack_dir(input_dir: &Path, output_path: &Path) -> Result<(), String> {
             .and_then(|s| s.to_str())
             .unwrap_or("")
             .to_string();
+        if id == "ScriptFileList" {
+            continue;
+        }
 
         let text =
             std::fs::read_to_string(&path).map_err(|e| format!("read {}: {e}", path.display()))?;
+        crate::crypto::script::validate(&id, &text)?;
+        if text.len() > crate::crypto::script::MAX_SCRIPT {
+            return Err(format!("{id}: script too large"));
+        }
 
         entries.push((id, text));
     }
@@ -54,7 +61,7 @@ pub fn pack_dir(input_dir: &Path, output_path: &Path) -> Result<(), String> {
     );
 
     let data = pack_entries(&entries)?;
-    std::fs::write(output_path, &data)
+    crate::storage::atomic_write(output_path, &data)
         .map_err(|e| format!("write {}: {e}", output_path.display()))?;
 
     log::info!("Written {} bytes", data.len());
@@ -68,9 +75,15 @@ struct EncryptedEntry {
 
 /// Pack entries into the binary format.
 fn pack_entries(entries: &[(String, String)]) -> Result<Vec<u8>, String> {
+    if entries.len() > 100_000 {
+        return Err("too many scripts".into());
+    }
     // Phase 1: Encrypt each entry and collect info
     let mut encrypted = Vec::new();
     for (id, text) in entries {
+        if id.is_empty() || id.len() > u8::MAX as usize {
+            return Err("invalid script ID length".into());
+        }
         let enc = encrypt_entry(id, text)?;
         encrypted.push(enc);
     }
@@ -93,7 +106,7 @@ fn pack_entries(entries: &[(String, String)]) -> Result<Vec<u8>, String> {
     buf.extend_from_slice(&(entries.len() as i32).to_be_bytes());
 
     // File entries + data
-    let mut current_offset = data_offset as u32;
+    let mut current_offset = u32::try_from(data_offset).map_err(|_| "bundle index too large")?;
     for e in &encrypted {
         // index (offset to data)
         buf.extend_from_slice(&current_offset.to_be_bytes());
@@ -101,11 +114,17 @@ fn pack_entries(entries: &[(String, String)]) -> Result<Vec<u8>, String> {
         buf.push(e.id.len() as u8);
         buf.extend_from_slice(e.id.as_bytes());
         // size
-        buf.extend_from_slice(&(e.data.len() as u32).to_be_bytes());
+        let size = u32::try_from(e.data.len()).map_err(|_| "script entry too large")?;
+        buf.extend_from_slice(&size.to_be_bytes());
         // crc (zero for now)
         buf.extend_from_slice(&0u32.to_be_bytes());
 
-        current_offset += e.data.len() as u32;
+        current_offset = current_offset
+            .checked_add(size)
+            .ok_or("bundle exceeds format size limit")?;
+        if current_offset > 128 * 1024 * 1024 {
+            return Err("bundle exceeds module size limit".into());
+        }
     }
 
     // Data section

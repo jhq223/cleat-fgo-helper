@@ -1,3 +1,8 @@
 /target
 /data
 /resources
+/dist
+/build
+*.keystore
+*.apk
+*.xapk

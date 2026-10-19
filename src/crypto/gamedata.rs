@@ -9,7 +9,6 @@
 use crate::config::ASSET_BUNDLE_KEY;
 use crate::crypto::rijndael;
 use serde::{Deserialize, Serialize};
-use std::io::Read;
 
 /// Parsed version info from gamedata MsgPack.
 #[derive(Debug, Clone, Deserialize, Default)]
@@ -22,11 +21,7 @@ pub struct GameData {
 
 /// Decrypt and unpack base64-encoded gamedata (MsgPack).
 pub fn unpack(base64_data: &str) -> Result<GameData, String> {
-    use base64::Engine;
-
-    let raw = base64::engine::general_purpose::STANDARD
-        .decode(base64_data)
-        .map_err(|e| format!("base64 decode: {e}"))?;
+    let raw = super::script::decode_base64(base64_data, 16 * 1024 * 1024)?;
 
     if raw.len() < 32 {
         return Err("gamedata too short".into());
@@ -37,22 +32,16 @@ pub fn unpack(base64_data: &str) -> Result<GameData, String> {
 
     let decrypted = rijndael::decrypt(body, ASSET_BUNDLE_KEY, &info_top)?;
 
-    let mut decompressed = Vec::new();
-    let mut decoder = flate2::read::GzDecoder::new(&decrypted[..]);
-    decoder
-        .read_to_end(&mut decompressed)
-        .map_err(|e| format!("gzip decompress: {e}"))?;
-
+    let decompressed = super::script::read_bounded(
+        flate2::read::GzDecoder::new(&decrypted[..]),
+        16 * 1024 * 1024,
+    )?;
     rmp_serde::from_slice(&decompressed).map_err(|e| format!("msgpack decode: {e}"))
 }
 
 /// Unpack assetbundleKey list (array of {id, decryptKey}).
 pub fn unpack_key_list(base64_data: &str) -> Result<Vec<AssetBundleKey>, String> {
-    use base64::Engine;
-
-    let raw = base64::engine::general_purpose::STANDARD
-        .decode(base64_data)
-        .map_err(|e| format!("base64 decode: {e}"))?;
+    let raw = super::script::decode_base64(base64_data, 16 * 1024 * 1024)?;
 
     if raw.len() < 32 {
         return Err("key list too short".into());
@@ -63,12 +52,10 @@ pub fn unpack_key_list(base64_data: &str) -> Result<Vec<AssetBundleKey>, String>
 
     let decrypted = rijndael::decrypt(body, ASSET_BUNDLE_KEY, &info_top)?;
 
-    let mut decompressed = Vec::new();
-    let mut decoder = flate2::read::GzDecoder::new(&decrypted[..]);
-    decoder
-        .read_to_end(&mut decompressed)
-        .map_err(|e| format!("gzip decompress: {e}"))?;
-
+    let decompressed = super::script::read_bounded(
+        flate2::read::GzDecoder::new(&decrypted[..]),
+        16 * 1024 * 1024,
+    )?;
     rmp_serde::from_slice(&decompressed).map_err(|e| format!("msgpack decode: {e}"))
 }
 

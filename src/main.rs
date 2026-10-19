@@ -16,8 +16,10 @@ mod config;
 mod crypto;
 mod error;
 mod mappings;
+mod release;
 mod res;
 mod scripts;
+mod storage;
 mod unity;
 
 use clap::{Parser, Subcommand};
@@ -31,6 +33,11 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
+    /// Fetch, validate and package CN translations for the JP client
+    Resources {
+        #[command(subcommand)]
+        action: ResourcesAction,
+    },
     /// APK modification pipeline (requires Java + apktool + apksigner)
     Apk {
         #[command(subcommand)]
@@ -60,6 +67,26 @@ enum Command {
     Mappings {
         #[command(subcommand)]
         action: MappingsAction,
+    },
+}
+
+#[derive(Subcommand)]
+enum ResourcesAction {
+    Build {
+        /// Reuse verified local snapshots without contacting game servers
+        #[arg(long)]
+        offline: bool,
+        /// HTTPS download directory; {version} is replaced with the content version
+        #[arg(
+            long,
+            default_value = "https://github.com/jhq223/cleat-fgo/releases/download/resources/"
+        )]
+        base_url: String,
+        #[arg(short, long, default_value = "dist/resources")]
+        output: String,
+        /// Optional Unity AssetBundle containing FGO-Main-Font-Mod
+        #[arg(long)]
+        font: Option<String>,
     },
 }
 
@@ -143,9 +170,9 @@ enum ScriptsAction {
 enum ScriptAction {
     /// Export dialogue and choice text to JSON for translation
     Export {
-        /// Input directory containing .txt script files
-        #[arg(short, long, default_value = "data/jp/scripts")]
-        input: String,
+        /// Input scripts (defaults to the current verified JP snapshot)
+        #[arg(short, long)]
+        input: Option<String>,
         /// Output directory for .json files
         #[arg(short, long, default_value = "data/export")]
         output: String,
@@ -156,8 +183,8 @@ enum ScriptAction {
         #[arg(short, long, default_value = "data/export")]
         json_dir: String,
         /// Original script directory (for tag verification)
-        #[arg(long, default_value = "data/jp/scripts")]
-        original: String,
+        #[arg(long)]
+        original: Option<String>,
         /// Output directory for modified .txt files
         #[arg(short, long, default_value = "data/output")]
         output: String,
@@ -183,11 +210,11 @@ enum ToolsAction {
     /// Copy JP-only scripts (missing from CN) to output directory
     Compare {
         /// JP scripts directory
-        #[arg(short, long, default_value = "data/jp/scripts")]
-        jp: String,
+        #[arg(short, long)]
+        jp: Option<String>,
         /// CN scripts directory
-        #[arg(short, long, default_value = "data/cn/scripts")]
-        cn: String,
+        #[arg(short, long)]
+        cn: Option<String>,
         /// Output directory for JP-only scripts
         #[arg(short, long, default_value = "data/jp_only")]
         output: String,
@@ -195,8 +222,8 @@ enum ToolsAction {
     /// Apply anti-harmonization replacements to CN scripts
     Deharmonize {
         /// Input directory containing CN .txt scripts
-        #[arg(short, long, default_value = "data/cn/scripts")]
-        input: String,
+        #[arg(short, long)]
+        input: Option<String>,
         /// Output directory for deharmonized scripts
         #[arg(short, long, default_value = "data/cn_deharmonized")]
         output: String,
@@ -213,13 +240,13 @@ enum ToolsAction {
     /// Fill CN Chinese translations into JP LocalizationJpn.txt
     Localize {
         /// JP data directory (contains LocalizationJpn.txt)
-        #[arg(short, long, default_value = "data/jp")]
-        jp: String,
+        #[arg(short, long)]
+        jp: Option<String>,
         /// CN data directory (contains LocalizationJpn1.txt)
-        #[arg(short, long, default_value = "data/cn")]
-        cn: String,
+        #[arg(short, long)]
+        cn: Option<String>,
         /// Output path for merged LocalizationJpn.txt
-        #[arg(short, long, default_value = "data/jp/LocalizationJpn_cn.txt")]
+        #[arg(short, long, default_value = "data/output/LocalizationJpn.txt")]
         output: String,
     },
 }
@@ -245,6 +272,14 @@ async fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
 
     match cli.command {
+        Command::Resources { action } => match action {
+            ResourcesAction::Build {
+                offline,
+                base_url,
+                output,
+                font,
+            } => release::build(offline, &base_url, &output, font.as_deref()).await?,
+        },
         Command::Apk { action } => match action {
             ApkAction::Setup { xapk } => apk::cmd_setup(std::path::Path::new(&xapk))?,
             ApkAction::Build {
@@ -281,12 +316,14 @@ async fn main() -> anyhow::Result<()> {
             MappingsAction::Download { output } => mappings::cmd_download(&output).await?,
         },
         Command::Script { action } => match action {
-            ScriptAction::Export { input, output } => scripts::cmd_export(&input, &output)?,
+            ScriptAction::Export { input, output } => {
+                scripts::cmd_export(&snapshot_input(input, "jp", true)?, &output)?
+            }
             ScriptAction::Import {
                 json_dir,
                 original,
                 output,
-            } => scripts::cmd_import(&json_dir, &original, &output)?,
+            } => scripts::cmd_import(&json_dir, &snapshot_input(original, "jp", true)?, &output)?,
             ScriptAction::Merge {
                 translated,
                 original,
@@ -294,16 +331,35 @@ async fn main() -> anyhow::Result<()> {
             } => scripts::cmd_merge(&translated, &original, &output)?,
         },
         Command::Tools { action } => match action {
-            ToolsAction::Compare { jp, cn, output } => scripts::cmd_compare(&jp, &cn, &output)?,
+            ToolsAction::Compare { jp, cn, output } => scripts::cmd_compare(
+                &snapshot_input(jp, "jp", true)?,
+                &snapshot_input(cn, "cn", true)?,
+                &output,
+            )?,
             ToolsAction::Deharmonize { input, output } => {
-                scripts::cmd_deharmonize(&input, &output)?
+                scripts::cmd_deharmonize(&snapshot_input(input, "cn", true)?, &output)?
             }
             ToolsAction::ScanNames { mappings, output } => {
                 scripts::cmd_scan_names(&mappings, &output)?
             }
-            ToolsAction::Localize { jp, cn, output } => scripts::cmd_localize(&jp, &cn, &output)?,
+            ToolsAction::Localize { jp, cn, output } => scripts::cmd_localize(
+                &snapshot_input(jp, "jp", false)?,
+                &snapshot_input(cn, "cn", false)?,
+                &output,
+            )?,
         },
     }
 
     Ok(())
+}
+
+fn snapshot_input(explicit: Option<String>, server: &str, scripts: bool) -> anyhow::Result<String> {
+    if let Some(path) = explicit {
+        return Ok(path);
+    }
+    let mut path = res::snapshot::active(server)?;
+    if scripts {
+        path.push("scripts");
+    }
+    Ok(path.to_string_lossy().into_owned())
 }
