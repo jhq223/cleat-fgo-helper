@@ -6,7 +6,9 @@ FGO 日服汉化资源和 APK 构建工具。
 
 ## 安装
 
-安装稳定版 Rust，在本仓库执行：
+Windows 用户从 [Releases](https://github.com/jhq223/cleat-fgo-helper/releases/latest) 下载 `fgo-helper-win.zip`，解压后使用 `fgo-helper.exe`。
+
+从源码安装：
 
 ```sh
 cargo install --path . --locked
@@ -15,15 +17,18 @@ cargo install --path . --locked
 ## 生成汉化资源
 
 ```sh
-fgo-helper resources build
+fgo-helper resources build --font resources/Font
 ```
 
-工具下载日服和国服当前资源，生成中文剧情包和界面本地化文件。输出目录为 `dist/resources/<版本>/`，版本号写入 `dist/resources/latest.txt`。
+将字体 AssetBundle 保存为 `resources/Font`，也可从模块的 [resources Release](https://github.com/jhq223/cleat-fgo/releases/tag/resources) 下载 `Font`。
+
+工具下载日服和国服当前资源，生成包含剧情、界面文本和字体的更新包。输出目录为 `dist/resources/<版本>/`，版本号写入 `dist/resources/latest.txt`。
 
 | 文件 | 用途 |
 |---|---|
 | `stories.script` | 中文剧情包 |
 | `LocalizationJpn.txt` | 界面本地化文本 |
+| `Font` | 中文字体 AssetBundle |
 | `manifest.json` | 供模块检查更新的资源清单 |
 | `report.json` | 待补充和待核对的剧情列表 |
 
@@ -49,11 +54,11 @@ gh release create resources --repo jhq223/cleat-fgo --title "Translation resourc
 进入本次构建的 `dist/resources/<版本>/` 目录，先上传资源文件，再上传清单：
 
 ```sh
-gh release upload resources stories.script LocalizationJpn.txt --repo jhq223/cleat-fgo --clobber
+gh release upload resources stories.script LocalizationJpn.txt Font --repo jhq223/cleat-fgo --clobber
 gh release upload resources manifest.json --repo jhq223/cleat-fgo --clobber
 ```
 
-附加字体时，将 `Font` 加入第一条上传命令。模块会在下一次更新检查时下载新资源。
+模块会在下一次更新检查时下载新资源。
 
 ## 人工翻译
 
